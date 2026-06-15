@@ -1,10 +1,14 @@
 // ==UserScript==
 // @name         Unwall
-// @namespace    https://github.com/mertkeles/unwall
+// @namespace    https://github.com/kelesmert/unwall
 // @version      0.1.5
 // @description  Detects anti-adblock access walls and removes them only with user approval.
-// @author       Mert Keles
+// @author       Mert Keleş
 // @license      GPL-3.0-or-later
+// @homepageURL  https://github.com/kelesmert/unwall
+// @supportURL   https://github.com/kelesmert/unwall/issues
+// @updateURL    https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
+// @downloadURL  https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
