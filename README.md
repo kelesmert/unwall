@@ -11,8 +11,10 @@ or collect telemetry.
 
 Use this method if you want Unwall to run automatically on pages you visit.
 
-1. Install a userscript manager such as Violentmonkey, Tampermonkey, or another
-   compatible manager.
+1. Install a userscript manager such as
+   [Violentmonkey](https://violentmonkey.github.io/),
+   [Tampermonkey](https://www.tampermonkey.net/), or
+   [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/).
 2. Open the userscript:
 
    https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
@@ -70,6 +72,16 @@ some sites may require updates when their page structure changes.
 
 To reduce false positives, Unwall avoids touching video players, login forms,
 payment pages, captchas, file uploads, and other sensitive page areas.
+
+## Feedback and Issues
+
+Unwall has not been tested on every website. If it misses an anti-adblock wall,
+removes the wrong element, or behaves unexpectedly, please report it:
+
+https://github.com/kelesmert/unwall/issues
+
+When possible, include the website URL, browser name, userscript manager, and a
+short description of what happened.
 
 ## License
 
