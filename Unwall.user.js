@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.5
+// @version      0.1.6
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
@@ -44,6 +44,8 @@
   const AUTO_THRESHOLD = 88;
   const DEFAULT_OBSERVER_MS = 7000;
   const EXTENDED_OBSERVER_MS = 18000;
+  const CARD_FADE_MS = 1000;
+  const UNDO_CARD_MS = 5000;
   const UNWALL_ROOT_SELECTOR = "[data-unwall-root]";
   const UNWALL_Z_INDEX = "2147483647";
 
@@ -1436,6 +1438,14 @@
         box-shadow: 0 18px 44px rgba(0, 0, 0, 0.48);
         font-size: 14px;
         line-height: 1.4;
+        opacity: 1;
+        transform: translateY(0);
+        transition: opacity ${CARD_FADE_MS}ms ease, transform ${CARD_FADE_MS}ms ease;
+      }
+      .card.closing {
+        opacity: 0;
+        transform: translateY(6px);
+        pointer-events: none;
       }
       .title {
         margin: 0 0 6px;
@@ -1562,18 +1572,37 @@
     return { wrapper, input };
   }
 
+  function closeCardWithFade(host, fadeMs = CARD_FADE_MS) {
+    if (state.cardHost !== host || !host?.isConnected) {
+      return;
+    }
+
+    const card = host.shadowRoot?.querySelector?.(".card");
+    card?.classList.add("closing");
+
+    window.setTimeout(() => {
+      if (state.cardHost === host && host?.isConnected) {
+        closeCard();
+      }
+    }, fadeMs);
+  }
+
+  function scheduleCardClose(host, duration) {
+    if (duration <= 0) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      closeCardWithFade(host);
+    }, duration);
+  }
+
   function showToast(text, duration = 5000) {
     const card = createCardBase("status");
     appendTextElement(card, "p", "mini", text);
     const host = state.cardHost;
 
-    if (duration > 0) {
-      window.setTimeout(() => {
-        if (state.cardHost === host && host?.isConnected) {
-          closeCard();
-        }
-      }, duration);
-    }
+    scheduleCardClose(host, duration);
   }
 
   function showUndo(result) {
@@ -1593,6 +1622,7 @@
 
     actions.appendChild(undoButton);
     card.appendChild(actions);
+    scheduleCardClose(state.cardHost, UNDO_CARD_MS);
 
     console.table({
       [messages.resultPopupHidden]: result.popupCount,
