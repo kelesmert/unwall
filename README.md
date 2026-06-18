@@ -17,7 +17,7 @@ Use this method if you want Unwall to run automatically on pages you visit.
    [Greasemonkey](https://addons.mozilla.org/en-US/firefox/addon/greasemonkey/).
 2. Open the userscript:
 
-   https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
+   https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js
 
 3. Confirm installation in your userscript manager.
 
@@ -25,13 +25,29 @@ After installation, browse normally. When Unwall detects an anti-adblock access
 wall, it shows a small confirmation card. Choose `Remove` to hide the wall, or
 `Ignore` to leave the page unchanged.
 
+Unwall runs only in top-level pages. Automatic detection and automatic removal
+are disabled on sensitive sites such as banking, payment, and email/login
+domains. You can still run a manual scan from the userscript manager menu.
+
+## Release and Trust Model
+
+The recommended install URL points to the latest GitHub Release asset, not the
+raw `main` branch. Maintainers should publish `Unwall.user.js` as a release
+asset, sign the release tag, and include a SHA-256 checksum in the release
+notes.
+
+Users who want to verify an update can compare the installed file with the
+checksum published in the matching GitHub Release. The raw `main` URL is a
+development channel for testing unreleased changes and is not recommended for
+normal installation.
+
 ## One-Time Console Use
 
 Use this method if you do not want to install the userscript permanently.
 
 1. Open the userscript file:
 
-   https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
+   https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js
 
 2. Copy the full file contents.
 3. Open the target page.
@@ -76,9 +92,9 @@ From the userscript manager menu, you can:
 - Show diagnostics.
 
 If automatic removal is enabled for a site, Unwall may remove high-confidence
-access walls on that site without asking again. Automatic removal is disabled on
-sensitive subdomains such as login, account, billing, checkout, and payment
-areas.
+access walls on that site without asking again. Automatic detection and
+automatic removal are disabled on sensitive sites and subdomains such as login,
+account, billing, checkout, payment, banking, email, and wallet areas.
 
 ## Safety and Limits
 
@@ -87,6 +103,10 @@ some sites may require updates when their page structure changes.
 
 To reduce false positives, Unwall avoids touching video players, login forms,
 payment pages, captchas, file uploads, and other sensitive page areas.
+
+Use Unwall responsibly and only where you have permission to test or modify the
+page experience. Website terms and local laws may restrict bypassing access
+walls; you are responsible for your own use of the script.
 
 ## Feedback and Issues
 

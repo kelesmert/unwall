@@ -1,17 +1,18 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.6
+// @version      0.1.7
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
 // @homepageURL  https://github.com/kelesmert/unwall
 // @supportURL   https://github.com/kelesmert/unwall/issues
-// @updateURL    https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
-// @downloadURL  https://raw.githubusercontent.com/kelesmert/unwall/main/Unwall.user.js
+// @updateURL    https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js
+// @downloadURL  https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
+// @noframes
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -25,10 +26,17 @@
 (async () => {
   "use strict";
 
-  window.__antiAdblockCleaner?.disconnect?.();
-  window.__unwall?.stop?.();
-
   const APP_NAME = "Unwall";
+  const SCRIPT_VERSION = "0.1.7";
+  const INSTANCE_KEY = "__unwall";
+  let previousInstance = null;
+
+  try {
+    previousInstance = window[INSTANCE_KEY];
+  } catch (error) {
+    console.warn(`${APP_NAME}: previous instance lookup failed`, error);
+  }
+
   const STORAGE_KEYS = {
     globalDetection: "globalDetection",
     siteModes: "siteModes"
@@ -44,6 +52,11 @@
   const AUTO_THRESHOLD = 88;
   const DEFAULT_OBSERVER_MS = 7000;
   const EXTENDED_OBSERVER_MS = 18000;
+  const OBSERVER_SCAN_DEBOUNCE_MS = 300;
+  const OBSERVER_SCAN_COOLDOWN_MS = 1200;
+  const OBSERVER_MUTATION_BATCH_LIMIT = 80;
+  const EVENT_HANDLER_RESTORE_MS = 250;
+  const IGNORED_SIGNATURE_LIMIT = 100;
   const CARD_FADE_MS = 1000;
   const UNDO_CARD_MS = 5000;
   const UNWALL_ROOT_SELECTOR = "[data-unwall-root]";
@@ -102,7 +115,9 @@
       autoDisabled: "Automatic removal is disabled for this site.",
       siteForgotten: "This site setting was forgotten.",
       sensitiveAutoBlocked:
-        "Automatic removal is disabled on sensitive subdomains.",
+        "Automatic removal is disabled on sensitive sites.",
+      sensitiveDetectionBlocked:
+        "Automatic detection is disabled on sensitive sites.",
       tableConfidence: "Confidence",
       tablePopupCount: "Popups",
       tableBackdropCount: "Backdrops",
@@ -149,7 +164,9 @@
       autoDisabled: "Bu site için otomatik kaldırma kapalı.",
       siteForgotten: "Bu sitenin ayarı unutuldu.",
       sensitiveAutoBlocked:
-        "Hassas alt alan adlarında otomatik kaldırma devre dışıdır.",
+        "Hassas sitelerde otomatik kaldırma devre dışıdır.",
+      sensitiveDetectionBlocked:
+        "Hassas sitelerde otomatik algılama devre dışıdır.",
       tableConfidence: "Güven",
       tablePopupCount: "Popup",
       tableBackdropCount: "Backdrop",
@@ -196,7 +213,9 @@
       autoDisabled: "Автоматическое удаление отключено для этого сайта.",
       siteForgotten: "Настройка этого сайта удалена.",
       sensitiveAutoBlocked:
-        "Автоматическое удаление отключено на чувствительных поддоменах.",
+        "Автоматическое удаление отключено на чувствительных сайтах.",
+      sensitiveDetectionBlocked:
+        "Автоматическое обнаружение отключено на чувствительных сайтах.",
       tableConfidence: "Уверенность",
       tablePopupCount: "Окна",
       tableBackdropCount: "Фоны",
@@ -314,15 +333,39 @@
     "wallet"
   ]);
 
+  const sensitiveHostSuffixes = new Set([
+    "accounts.google.com",
+    "mail.google.com",
+    "outlook.live.com",
+    "login.live.com",
+    "login.microsoftonline.com",
+    "paypal.com",
+    "venmo.com",
+    "stripe.com",
+    "checkout.stripe.com",
+    "coinbase.com",
+    "robinhood.com",
+    "chase.com",
+    "bankofamerica.com",
+    "wellsfargo.com",
+    "citi.com",
+    "capitalone.com",
+    "americanexpress.com",
+    "discover.com",
+    "ally.com"
+  ]);
+
   const state = {
     observer: null,
     observerTimer: null,
     scheduledScan: false,
+    lastObserverScanAt: 0,
     suppressObserver: false,
     cardHost: null,
     cardShadow: null,
     cardEscapeHandler: null,
     ignoredSignatures: new Set(),
+    ignoredSignatureQueue: [],
     lastDetection: null,
     lastRestore: null,
     globalDetection: true,
@@ -424,6 +467,32 @@
       : Promise.resolve(value);
   }
 
+  function isUnwallInstance(value) {
+    return (
+      value &&
+      typeof value.stop === "function" &&
+      (
+        value.app === APP_NAME ||
+        typeof value.scanNow === "function" ||
+        typeof value.diagnostics === "function"
+      )
+    );
+  }
+
+  function hostMatchesSuffix(host, suffix) {
+    return host === suffix || host.endsWith(`.${suffix}`);
+  }
+
+  function hasSensitiveHostSuffix(host) {
+    for (const suffix of sensitiveHostSuffixes) {
+      if (hostMatchesSuffix(host, suffix)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function getHostInfo(hostname = location.hostname) {
     const host = String(hostname || "")
       .toLowerCase()
@@ -435,9 +504,12 @@
 
     const siteKey = effectiveParts.join(".") || host;
     const firstLabel = effectiveParts[0] || "";
-    const isSensitive =
+    const hasSensitiveSubdomain =
       effectiveParts.length > 2 &&
       sensitiveSubdomains.has(firstLabel);
+    const isSensitive =
+      hasSensitiveSubdomain ||
+      hasSensitiveHostSuffix(host);
 
     return {
       host,
@@ -961,6 +1033,20 @@
     return `${language}:${textPart}:${popupPart}`;
   }
 
+  function rememberIgnoredSignature(signature) {
+    if (!signature || state.ignoredSignatures.has(signature)) {
+      return;
+    }
+
+    state.ignoredSignatures.add(signature);
+    state.ignoredSignatureQueue.push(signature);
+
+    while (state.ignoredSignatureQueue.length > IGNORED_SIGNATURE_LIMIT) {
+      const oldest = state.ignoredSignatureQueue.shift();
+      state.ignoredSignatures.delete(oldest);
+    }
+  }
+
   function scoreDetection({
     warningElements,
     popups,
@@ -1103,6 +1189,24 @@
     return detection;
   }
 
+  function restoreEventHandlers(record, onlyIfCleared = false) {
+    if (!record || record.type !== "event-handlers") {
+      return;
+    }
+
+    if (!onlyIfCleared || window.onscroll === null) {
+      window.onscroll = record.windowOnScroll;
+    }
+
+    if (!onlyIfCleared || document.onscroll === null) {
+      document.onscroll = record.documentOnScroll;
+    }
+
+    if (document.body && (!onlyIfCleared || document.body.onscroll === null)) {
+      document.body.onscroll = record.bodyOnScroll;
+    }
+  }
+
   function createRestoreSession() {
     const records = [];
 
@@ -1159,12 +1263,15 @@
       },
 
       saveEventHandlers() {
-        records.push({
+        const record = {
           type: "event-handlers",
           windowOnScroll: window.onscroll,
           documentOnScroll: document.onscroll,
           bodyOnScroll: document.body?.onscroll || null
-        });
+        };
+
+        records.push(record);
+        return record;
       },
 
       restore() {
@@ -1210,12 +1317,7 @@
           }
 
           if (record.type === "event-handlers") {
-            window.onscroll = record.windowOnScroll;
-            document.onscroll = record.documentOnScroll;
-
-            if (document.body) {
-              document.body.onscroll = record.bodyOnScroll;
-            }
+            restoreEventHandlers(record);
           }
         }
 
@@ -1303,7 +1405,7 @@
       return false;
     }
 
-    restore.saveEventHandlers();
+    const eventHandlers = restore.saveEventHandlers();
     window.onscroll = null;
     document.onscroll = null;
 
@@ -1312,6 +1414,11 @@
     }
 
     window.scrollTo(0, target);
+    window.setTimeout(
+      () => restoreEventHandlers(eventHandlers, true),
+      EVENT_HANDLER_RESTORE_MS
+    );
+
     return true;
   }
 
@@ -1417,7 +1524,7 @@
       host.setAttribute("popover", "manual");
     }
 
-    const shadow = host.attachShadow({ mode: "open" });
+    const shadow = host.attachShadow({ mode: "closed" });
     const style = document.createElement("style");
     style.textContent = `
       :host {
@@ -1577,7 +1684,10 @@
       return;
     }
 
-    const card = host.shadowRoot?.querySelector?.(".card");
+    const card =
+      state.cardHost === host
+        ? state.cardShadow?.querySelector?.(".card")
+        : null;
     card?.classList.add("closing");
 
     window.setTimeout(() => {
@@ -1722,7 +1832,7 @@
     const removeButton = createButton(messages.remove, "primary");
 
     ignoreButton.addEventListener("click", () => {
-      state.ignoredSignatures.add(detection.signature);
+      rememberIgnoredSignature(detection.signature);
       closeCard();
     });
 
@@ -1757,8 +1867,49 @@
     );
   }
 
+  function isAutomaticDetectionAllowed() {
+    return !hostInfo.isSensitive;
+  }
+
+  function shouldRunAutomatically() {
+    return (
+      state.globalDetection ||
+      state.siteMode === MODES.remember ||
+      state.siteMode === MODES.auto
+    );
+  }
+
+  function automaticObserverDuration() {
+    return state.siteMode === MODES.default
+      ? DEFAULT_OBSERVER_MS
+      : EXTENDED_OBSERVER_MS;
+  }
+
+  async function runAutomaticDetection() {
+    if (!shouldRunAutomatically()) {
+      stopObserver();
+      return;
+    }
+
+    if (!isAutomaticDetectionAllowed()) {
+      stopObserver();
+      console.log(messages.sensitiveDetectionBlocked);
+      return;
+    }
+
+    await scan({ manual: false });
+
+    if (!state.lastDetection?.found) {
+      startObserver(automaticObserverDuration());
+    }
+  }
+
   async function scan({ manual = false } = {}) {
     if (state.stopped) {
+      return null;
+    }
+
+    if (!manual && !isAutomaticDetectionAllowed()) {
       return null;
     }
 
@@ -1826,26 +1977,55 @@
     return false;
   }
 
+  function mutationBatchLooksInteresting(mutations) {
+    const sampledMutations =
+      mutations.length > OBSERVER_MUTATION_BATCH_LIMIT
+        ? mutations.slice(0, OBSERVER_MUTATION_BATCH_LIMIT)
+        : mutations;
+
+    if (!sampledMutations.some(mutationLooksInteresting)) {
+      return false;
+    }
+
+    const hasChildListMutation =
+      sampledMutations.some(mutation => mutation.type === "childList");
+
+    return (
+      hasChildListMutation ||
+      Date.now() - state.lastObserverScanAt >= OBSERVER_SCAN_COOLDOWN_MS
+    );
+  }
+
   function scheduleObserverScan() {
     if (state.scheduledScan || state.suppressObserver) {
       return;
     }
 
     state.scheduledScan = true;
+    const elapsed = Date.now() - state.lastObserverScanAt;
+    const delay = Math.max(
+      OBSERVER_SCAN_DEBOUNCE_MS,
+      OBSERVER_SCAN_COOLDOWN_MS - elapsed
+    );
 
     window.setTimeout(async () => {
       state.scheduledScan = false;
       await scan({ manual: false });
-    }, 300);
+      state.lastObserverScanAt = Date.now();
+    }, delay);
   }
 
   function startObserver(durationMs) {
     stopObserver();
 
+    if (!isAutomaticDetectionAllowed()) {
+      return;
+    }
+
     const observer = new MutationObserver(mutations => {
       if (
         state.suppressObserver ||
-        !mutations.some(mutationLooksInteresting)
+        !mutationBatchLooksInteresting(mutations)
       ) {
         return;
       }
@@ -1920,18 +2100,16 @@
         await setGlobalDetection(!state.globalDetection);
 
         if (state.globalDetection) {
-          await scan({ manual: false });
-
-          if (!state.lastDetection?.found) {
-            startObserver(DEFAULT_OBSERVER_MS);
-          }
+          await runAutomaticDetection();
         } else {
           stopObserver();
         }
 
         showToast(
           state.globalDetection
-            ? messages.globalOn
+            ? hostInfo.isSensitive
+              ? messages.sensitiveDetectionBlocked
+              : messages.globalOn
             : messages.globalOff,
           5000
         );
@@ -1941,6 +2119,11 @@
     manager.registerMenuCommand(
       menuLabel(messages.rememberSite),
       async () => {
+        if (hostInfo.isSensitive) {
+          showToast(messages.sensitiveDetectionBlocked, 6000);
+          return;
+        }
+
         await saveSiteMode(MODES.remember);
         showToast(messages.remembered, 5000);
       }
@@ -1988,34 +2171,42 @@
     state.stopped = true;
     stopObserver();
     closeCard();
+
+    try {
+      if (window[INSTANCE_KEY]?.stop === stop) {
+        delete window[INSTANCE_KEY];
+      }
+    } catch (error) {
+      console.warn(`${APP_NAME}: instance cleanup failed`, error);
+    }
   }
 
   await loadPreferences();
   registerMenuCommands();
 
-  window.__unwall = {
-    stop,
-    scanNow: () => scan({ manual: true }),
-    diagnostics: logDiagnostics,
-    restoreLast: () => state.lastRestore?.restore()
-  };
-
-  const shouldRunAutomatically =
-    state.globalDetection ||
-    state.siteMode === MODES.remember ||
-    state.siteMode === MODES.auto;
-
-  if (shouldRunAutomatically) {
-    await scan({ manual: false });
-
-    if (!state.lastDetection?.found) {
-      startObserver(
-        state.siteMode === MODES.default
-          ? DEFAULT_OBSERVER_MS
-          : EXTENDED_OBSERVER_MS
-      );
+  if (isUnwallInstance(previousInstance)) {
+    try {
+      previousInstance.stop();
+    } catch (error) {
+      console.warn(`${APP_NAME}: previous instance cleanup failed`, error);
     }
   }
+
+  try {
+    Object.defineProperty(window, INSTANCE_KEY, {
+      configurable: true,
+      enumerable: false,
+      value: Object.freeze({
+        app: APP_NAME,
+        version: SCRIPT_VERSION,
+        stop
+      })
+    });
+  } catch (error) {
+    console.warn(`${APP_NAME}: instance registration failed`, error);
+  }
+
+  await runAutomaticDetection();
 
   console.log(messages.active);
 })();
