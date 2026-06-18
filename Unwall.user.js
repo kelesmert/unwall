@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.7
+// @version      0.1.8
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
@@ -27,7 +27,7 @@
   "use strict";
 
   const APP_NAME = "Unwall";
-  const SCRIPT_VERSION = "0.1.7";
+  const SCRIPT_VERSION = "0.1.8";
   const INSTANCE_KEY = "__unwall";
   let previousInstance = null;
 
@@ -719,6 +719,30 @@
     return Number.isFinite(value) ? value : 0;
   }
 
+  function isNativeDialog(element) {
+    return (
+      element?.localName === "dialog" &&
+      typeof element.close === "function"
+    );
+  }
+
+  function isOpenNativeDialog(element) {
+    return (
+      isNativeDialog(element) &&
+      (element.open || element.hasAttribute("open"))
+    );
+  }
+
+  function closeNativeDialog(element) {
+    try {
+      if (element.open) {
+        element.close();
+      }
+    } catch {}
+
+    element.removeAttribute("open");
+  }
+
   function findWarningTextElements(scope = document) {
     const selectors = [
       '[role="dialog"]',
@@ -734,6 +758,7 @@
       "p",
       "span",
       "button",
+      "dialog",
       "div",
       "section",
       "aside"
@@ -787,6 +812,7 @@
       const style = getComputedStyle(current);
       const rect = current.getBoundingClientRect();
       const role = current.getAttribute("role");
+      const nativeDialogOpen = isOpenNativeDialog(current);
 
       const positioned = [
         "fixed",
@@ -801,26 +827,29 @@
       const ariaModal =
         current.getAttribute("aria-modal") === "true";
 
+      const dialogLike =
+        nativeDialogOpen ||
+        dialogRole ||
+        ariaModal;
+
       const reasonableSize =
         rect.width >= Math.min(250, innerWidth * 0.25) &&
         rect.height >= Math.min(120, innerHeight * 0.15);
 
       const notHugeContent =
         normalizedText(current).length < 2500 ||
-        dialogRole ||
-        ariaModal;
+        dialogLike;
 
       const stackingLooksModal =
         numericZIndex(current) >= 5 ||
         style.position === "fixed" ||
-        dialogRole ||
-        ariaModal;
+        dialogLike;
 
       if (
         reasonableSize &&
         notHugeContent &&
         stackingLooksModal &&
-        (dialogRole || ariaModal || positioned)
+        (dialogLike || positioned)
       ) {
         return current;
       }
@@ -1009,6 +1038,160 @@
     return [...new Set(elements)].filter(Boolean);
   }
 
+  function viewportSize() {
+    return {
+      width:
+        window.innerWidth ||
+        document.documentElement?.clientWidth ||
+        1,
+      height:
+        window.innerHeight ||
+        document.documentElement?.clientHeight ||
+        1
+    };
+  }
+
+  function viewportProbePoints() {
+    const { width, height } = viewportSize();
+
+    return [
+      [width / 2, height / 2],
+      [width / 2, height * 0.25],
+      [width / 2, height * 0.75],
+      [width * 0.25, height / 2],
+      [width * 0.75, height / 2]
+    ];
+  }
+
+  function elementsAtPoint(x, y) {
+    try {
+      if (typeof document.elementsFromPoint === "function") {
+        return document.elementsFromPoint(x, y);
+      }
+
+      const element = document.elementFromPoint?.(x, y);
+      return element ? [element] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function hitTestCandidates() {
+    return uniqueElements(
+      viewportProbePoints().flatMap(([x, y]) =>
+        elementsAtPoint(x, y).slice(0, 12)
+      )
+    );
+  }
+
+  function isRelatedToDetection(element, detection) {
+    const relatedElements = [
+      ...detection.popups,
+      ...detection.backdrops
+    ];
+
+    return relatedElements.some(related => {
+      if (!related) {
+        return false;
+      }
+
+      return (
+        element === related ||
+        element.contains(related) ||
+        related.contains(element) ||
+        (
+          element.parentElement &&
+          element.parentElement === related.parentElement
+        )
+      );
+    });
+  }
+
+  function isDetectionDialog(element, detection) {
+    return (
+      isOpenNativeDialog(element) &&
+      (
+        detection.warningElements.some(warning => element.contains(warning)) ||
+        detection.popups.some(popup =>
+          element === popup ||
+          element.contains(popup) ||
+          popup.contains(element)
+        ) ||
+        hasAntiAdblockSignal(element)
+      )
+    );
+  }
+
+  function findOpenDetectionDialog(detection) {
+    if (!detection?.found) {
+      return null;
+    }
+
+    return [...document.querySelectorAll("dialog[open]")]
+      .filter(dialog => isDetectionDialog(dialog, detection))
+      .sort((a, b) => numericZIndex(b) - numericZIndex(a))[0] ||
+      null;
+  }
+
+  function looksLikeResidualClickBlocker(element, detection) {
+    if (
+      !(element instanceof Element) ||
+      !element.isConnected ||
+      element === document.documentElement ||
+      element === document.body ||
+      element.hasAttribute("data-unwall-hidden") ||
+      isInUnwallUI(element) ||
+      containsProtectedContent(element)
+    ) {
+      return false;
+    }
+
+    const style = getComputedStyle(element);
+
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.pointerEvents === "none"
+    ) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const { width, height } = viewportSize();
+    const coversViewport =
+      rect.width >= width * 0.85 &&
+      rect.height >= height * 0.85;
+
+    const pinned = [
+      "fixed",
+      "absolute",
+      "sticky"
+    ].includes(style.position);
+
+    const transparentish =
+      getColorAlpha(style.backgroundColor) < 0.12 ||
+      Number(style.opacity || 1) < 0.25;
+
+    const blockerish =
+      hasBlur(style) ||
+      transparentish ||
+      style.cursor === "not-allowed";
+
+    const lowContent = normalizedText(element).length < 300;
+    const highLayer =
+      numericZIndex(element) >= 5 ||
+      style.position === "fixed" ||
+      isRelatedToDetection(element, detection);
+
+    return (
+      coversViewport &&
+      pinned &&
+      blockerish &&
+      lowContent &&
+      highLayer
+    );
+  }
+
   function makeSignature(warningElements, popups) {
     const textPart =
       warningElements
@@ -1078,6 +1261,7 @@
       popups.some(element => {
         const role = element.getAttribute("role");
         return (
+          isOpenNativeDialog(element) ||
           role === "dialog" ||
           role === "alertdialog" ||
           element.getAttribute("aria-modal") === "true"
@@ -1256,6 +1440,18 @@
           value: element.getAttribute("style")
         });
 
+        if (isOpenNativeDialog(element)) {
+          records.push({
+            type: "attribute",
+            element,
+            name: "open",
+            hadValue: element.hasAttribute("open"),
+            value: element.getAttribute("open")
+          });
+
+          closeNativeDialog(element);
+        }
+
         this.setAttribute(element, "aria-hidden", "true");
         this.setAttribute(element, "data-unwall-hidden", reason);
         element.style.setProperty("display", "none", "important");
@@ -1422,6 +1618,49 @@
     return true;
   }
 
+  function unlockRootInteraction(restore) {
+    for (const element of [
+      document.documentElement,
+      document.body
+    ].filter(Boolean)) {
+      const style = getComputedStyle(element);
+
+      if (style.pointerEvents === "none") {
+        restore.setStyle(element, "pointer-events", "auto", "important");
+      }
+
+      if (style.touchAction === "none") {
+        restore.setStyle(element, "touch-action", "auto", "important");
+      }
+    }
+  }
+
+  function closeRelatedOpenDialogs(detection, restore) {
+    for (const dialog of document.querySelectorAll("dialog[open]")) {
+      if (!isDetectionDialog(dialog, detection)) {
+        continue;
+      }
+
+      restore.hideElement(dialog, "open-dialog");
+    }
+  }
+
+  function hideResidualClickBlockers(detection, restore) {
+    for (const element of hitTestCandidates()) {
+      if (!looksLikeResidualClickBlocker(element, detection)) {
+        continue;
+      }
+
+      restore.hideElement(element, "residual-click-blocker");
+    }
+  }
+
+  function unlockResidualInteraction(detection, restore) {
+    unlockRootInteraction(restore);
+    closeRelatedOpenDialogs(detection, restore);
+    hideResidualClickBlockers(detection, restore);
+  }
+
   async function cleanDetection(detection) {
     const restore = createRestoreSession();
     state.suppressObserver = true;
@@ -1456,6 +1695,7 @@
         detection.confidence >= AUTO_THRESHOLD
           ? await releaseJavaScriptScrollLock(restore)
           : false;
+      unlockResidualInteraction(detection, restore);
 
       return {
         restore,
@@ -1489,6 +1729,14 @@
 
   function setImportantStyle(element, property, value) {
     element.style.setProperty(property, value, "important");
+  }
+
+  function getCardMountParent() {
+    return (
+      findOpenDetectionDialog(state.lastDetection) ||
+      document.body ||
+      document.documentElement
+    );
   }
 
   function createCardBase(mode = "dialog") {
@@ -1631,7 +1879,14 @@
     card.setAttribute("aria-live", "polite");
 
     shadow.append(style, card);
-    (document.body || document.documentElement).appendChild(host);
+
+    const mountParent = getCardMountParent();
+
+    if (isOpenNativeDialog(mountParent)) {
+      host.setAttribute("data-unwall-dialog-mounted", "");
+    }
+
+    mountParent.appendChild(host);
 
     try {
       host.showPopover?.();
