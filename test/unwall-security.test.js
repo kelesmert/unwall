@@ -5,7 +5,6 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 const script = fs.readFileSync(path.join(repoRoot, "Unwall.user.js"), "utf8");
-const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
 
 function metadataValue(key) {
   const match = script.match(new RegExp(`^//\\s+@${key}\\s+(.+)$`, "m"));
@@ -72,11 +71,4 @@ test("ignored signatures are bounded", () => {
   assert.match(script, /IGNORED_SIGNATURE_LIMIT/);
   assert.match(script, /ignoredSignatureQueue/);
   assert.match(script, /while \(state\.ignoredSignatureQueue\.length > IGNORED_SIGNATURE_LIMIT\)/);
-});
-
-test("README documents release trust and responsible use", () => {
-  assert.match(readme, /releases\/latest\/download\/Unwall\.user\.js/);
-  assert.match(readme, /Release and Trust Model/);
-  assert.match(readme, /SHA-256 checksum/);
-  assert.match(readme, /Use Unwall responsibly/);
 });

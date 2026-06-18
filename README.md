@@ -29,17 +29,10 @@ Unwall runs only in top-level pages. Automatic detection and automatic removal
 are disabled on sensitive sites such as banking, payment, and email/login
 domains. You can still run a manual scan from the userscript manager menu.
 
-## Release and Trust Model
-
-The recommended install URL points to the latest GitHub Release asset, not the
-raw `main` branch. Maintainers should publish `Unwall.user.js` as a release
-asset, sign the release tag, and include a SHA-256 checksum in the release
-notes.
-
-Users who want to verify an update can compare the installed file with the
-checksum published in the matching GitHub Release. The raw `main` URL is a
-development channel for testing unreleased changes and is not recommended for
-normal installation.
+The install link uses the latest stable GitHub Release. The raw `main` branch is
+for development and may contain unreleased changes.
+For manual verification, each GitHub Release includes a SHA-256 checksum for
+`Unwall.user.js`.
 
 ## One-Time Console Use
 
