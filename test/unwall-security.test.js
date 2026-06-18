@@ -15,7 +15,7 @@ test("metadata uses release distribution and top-level pages only", () => {
   const releaseUrl =
     "https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js";
 
-  assert.equal(metadataValue("version"), "0.1.7");
+  assert.equal(metadataValue("version"), "0.1.8");
   assert.equal(metadataValue("updateURL"), releaseUrl);
   assert.equal(metadataValue("downloadURL"), releaseUrl);
   assert.match(script, /^\/\/ @noframes$/m);
