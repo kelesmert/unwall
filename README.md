@@ -47,6 +47,21 @@ The console code is the same `Unwall.user.js` file. The userscript metadata
 comments are ignored by the browser console, and Unwall falls back to temporary
 in-page memory when manager storage APIs are not available.
 
+## Experimental Unblur Script
+
+`Unblur.user.js` is an experimental companion script for educational testing of
+client-side content gates. It asks before making changes and only works when the
+content is already present in the page, such as CSS-blurred text, hidden HTML,
+embedded article data, or similar client-side markup.
+
+Unblur cannot reveal server-side paywalls. If the remaining article text is not
+sent to the browser, the script can only report that no revealable content was
+found.
+
+Use Unblur responsibly and only where you have permission to test. You are
+responsible for your own use of the script; the author accepts no responsibility
+for misuse or for consequences of using it on third-party websites.
+
 ## Site Options
 
 Unwall asks before removing an access wall by default.
