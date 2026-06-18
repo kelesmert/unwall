@@ -1433,30 +1433,37 @@
         });
       },
 
-      hideElement(element, reason) {
-        records.push({
-          type: "style-attribute",
-          element,
-          value: element.getAttribute("style")
-        });
+hideElement(element, reason) {
+  records.push({
+    type: "style-attribute",
+    element,
+    value: element.getAttribute("style")
+  });
 
-        if (isOpenNativeDialog(element)) {
-          records.push({
-            type: "attribute",
-            element,
-            name: "open",
-            hadValue: element.hasAttribute("open"),
-            value: element.getAttribute("open")
-          });
+  this.setAttribute(element, "aria-hidden", "true");
+  this.setAttribute(element, "data-unwall-hidden", reason);
 
-          closeNativeDialog(element);
-        }
+  // Native dialogs can remain in the browser top layer / modal state
+  // even if they are visually hidden with CSS, so close them explicitly.
+  if (element instanceof HTMLDialogElement) {
+    records.push({
+      type: "attribute",
+      element,
+      name: "open",
+      hadValue: element.hasAttribute("open"),
+      value: element.getAttribute("open")
+    });
 
-        this.setAttribute(element, "aria-hidden", "true");
-        this.setAttribute(element, "data-unwall-hidden", reason);
-        element.style.setProperty("display", "none", "important");
-        element.style.setProperty("pointer-events", "none", "important");
-      },
+    try {
+      if (element.open) element.close();
+    } catch {}
+
+    element.removeAttribute("open");
+  }
+
+  element.style.setProperty("display", "none", "important");
+  element.style.setProperty("pointer-events", "none", "important");
+},
 
       saveEventHandlers() {
         const record = {
@@ -1691,11 +1698,13 @@
       }
 
       const cssScrollUnlocked = unlockCSSScroll(detection, restore);
+	  
+	  const interactionUnlocked = unlockInteraction(restore);
+	  
       const jsScrollUnlocked =
         detection.confidence >= AUTO_THRESHOLD
           ? await releaseJavaScriptScrollLock(restore)
           : false;
-      unlockResidualInteraction(detection, restore);
 
       return {
         restore,
@@ -1703,12 +1712,143 @@
         backdropCount: detection.backdrops.length,
         blurCount: detection.blurElements.length,
         cssScrollUnlocked,
-        jsScrollUnlocked
+        jsScrollUnlocked,
+		interactionUnlocked
       };
     } finally {
       state.suppressObserver = false;
     }
   }
+  
+function looksLikeLeftoverClickBlocker(element) {
+  if (!(element instanceof Element)) return false;
+  if (element.hasAttribute("data-unwall-hidden")) return false;
+  if (isInUnwallUI(element)) return false;
+  if (containsProtectedContent(element)) return false;
+
+  const style = getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  if (style.pointerEvents === "none") return false;
+
+  const rect = element.getBoundingClientRect();
+  const z = numericZIndex(element);
+
+  const coversViewport =
+    rect.width >= window.innerWidth * 0.9 &&
+    rect.height >= window.innerHeight * 0.9;
+
+  const pinned =
+    style.position === "fixed" ||
+    style.position === "absolute" ||
+    style.position === "sticky";
+
+  const transparentish =
+    getColorAlpha(style.backgroundColor) < 0.08 &&
+    Number(style.opacity || 1) <= 1;
+
+  const backdropish =
+    hasBlur(style) ||
+    transparentish ||
+    style.cursor === "not-allowed";
+
+  return coversViewport && pinned && z >= 5 && backdropish;
+}
+
+function centerHitCandidates() {
+  const points = [
+    [window.innerWidth / 2, window.innerHeight / 2],
+    [window.innerWidth / 2, window.innerHeight * 0.25],
+    [window.innerWidth / 2, window.innerHeight * 0.75]
+  ];
+
+  return uniqueElements(
+    points
+      .map(([x, y]) => document.elementFromPoint(x, y))
+      .filter(Boolean)
+  );
+}
+
+function collectStructuralInteractionCandidates() {
+  const candidates = new Set();
+
+  const body = document.body;
+  const root = document.documentElement;
+
+  if (root) {
+    candidates.add(root);
+  }
+
+  if (body) {
+    candidates.add(body);
+
+    for (const child of body.children) {
+      candidates.add(child);
+    }
+  }
+
+  for (const element of centerHitCandidates()) {
+    candidates.add(element);
+
+    let current = element?.parentElement || null;
+    let depth = 0;
+
+    while (
+      current &&
+      current !== body &&
+      current !== root &&
+      depth < 4
+    ) {
+      candidates.add(current);
+      current = current.parentElement;
+      depth += 1;
+    }
+  }
+
+  return [...candidates];
+}
+
+function unlockInteraction(restore) {
+  const roots = [document.documentElement, document.body].filter(Boolean);
+  let neutralizedCount = 0;
+
+  for (const element of roots) {
+    restore.setStyle(element, "pointer-events", "auto", "important");
+    restore.setStyle(element, "touch-action", "auto", "important");
+  }
+
+  for (const dialog of document.querySelectorAll("dialog[open]")) {
+    if (!(dialog instanceof HTMLDialogElement)) {
+      continue;
+    }
+
+    restore.setAttribute(dialog, "open", null);
+
+    try {
+      if (dialog.open) {
+        dialog.close();
+      }
+    } catch {}
+
+    dialog.removeAttribute("open");
+    restore.hideElement(dialog, "leftover-open-dialog");
+    neutralizedCount += 1;
+  }
+
+  const candidates = uniqueElements(
+    collectStructuralInteractionCandidates()
+  );
+
+  for (const element of candidates) {
+    if (!looksLikeLeftoverClickBlocker(element)) {
+      continue;
+    }
+
+    restore.hideElement(element, "leftover-click-blocker");
+    neutralizedCount += 1;
+  }
+
+  return neutralizedCount;
+}  
 
   function closeCard() {
     if (state.cardEscapeHandler) {
