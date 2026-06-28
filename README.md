@@ -61,8 +61,8 @@ in-page memory when manager storage APIs are not available.
 Unwall has not been tested on every website. If Unwall does not work on a
 specific site, please report it using one of these options:
 
-- [Quick report without GitHub](https://forms.gle/excetAfqFE8Xufy49)
-- [Report a broken site](https://github.com/kelesmert/unwall/issues/new?template=site-not-working.yml)
+- [Report on Google Forms](https://forms.gle/excetAfqFE8Xufy49)
+- [Report on GitHub](https://github.com/kelesmert/unwall/issues/new?template=site-not-working.yml)
 
 When possible, include the website URL, browser name, userscript manager, and a
 short description of what happened.
