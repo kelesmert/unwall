@@ -56,20 +56,19 @@ The console code is the same `Unwall.user.js` file. The userscript metadata
 comments are ignored by the browser console, and Unwall falls back to temporary
 in-page memory when manager storage APIs are not available.
 
-## Experimental Unblur Script
+## Report a Broken Site
 
-`Unblur.user.js` is an experimental companion script for educational testing of
-client-side content gates. It asks before making changes and only works when the
-content is already present in the page, such as CSS-blurred text, hidden HTML,
-embedded article data, or similar client-side markup.
+Unwall has not been tested on every website. If Unwall does not work on a
+specific site, please use the site report form:
 
-Unblur cannot reveal server-side paywalls. If the remaining article text is not
-sent to the browser, the script can only report that no revealable content was
-found.
+- [Report a broken site](https://github.com/kelesmert/unwall/issues/new?template=site-not-working.yml)
 
-Use Unblur responsibly and only where you have permission to test. You are
-responsible for your own use of the script; the author accepts no responsibility
-for misuse or for consequences of using it on third-party websites.
+When possible, include the website URL, browser name, userscript manager, and a
+short description of what happened.
+
+For other bugs, questions, or feedback, open a regular GitHub issue:
+
+- [Open an issue](https://github.com/kelesmert/unwall/issues/new)
 
 ## Site Options
 
@@ -101,15 +100,20 @@ Use Unwall responsibly and only where you have permission to test or modify the
 page experience. Website terms and local laws may restrict bypassing access
 walls; you are responsible for your own use of the script.
 
-## Feedback and Issues
+## Experimental Unblur Script
 
-Unwall has not been tested on every website. If it misses an anti-adblock wall,
-removes the wrong element, or behaves unexpectedly, please report it:
+`Unblur.user.js` is an experimental companion script for educational testing of
+client-side content gates. It asks before making changes and only works when the
+content is already present in the page, such as CSS-blurred text, hidden HTML,
+embedded article data, or similar client-side markup.
 
-https://github.com/kelesmert/unwall/issues
+Unblur cannot reveal server-side paywalls. If the remaining article text is not
+sent to the browser, the script can only report that no revealable content was
+found.
 
-When possible, include the website URL, browser name, userscript manager, and a
-short description of what happened.
+Use Unblur responsibly and only where you have permission to test. You are
+responsible for your own use of the script; the author accepts no responsibility
+for misuse or for consequences of using it on third-party websites.
 
 ## License
 

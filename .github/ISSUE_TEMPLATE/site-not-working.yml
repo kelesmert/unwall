@@ -1,0 +1,38 @@
+name: Site not working
+description: Report a website where Unwall does not work
+title: "[Site not working]: "
+labels: ["site-report"]
+body:
+  - type: input
+    id: website
+    attributes:
+      label: Website URL or domain
+      description: Example: example.com or https://example.com/article/...
+      placeholder: https://example.com/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Optional. What did you expect and what happened instead?
+      placeholder: It did not work / overlay stayed / button did nothing...
+    validations:
+      required: false
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      placeholder: Chrome / Firefox / Edge
+    validations:
+      required: false
+
+  - type: input
+    id: userscript_manager
+    attributes:
+      label: Userscript manager
+      placeholder: Tampermonkey / Violentmonkey / Greasemonkey
+    validations:
+      required: false
