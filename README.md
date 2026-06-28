@@ -59,8 +59,9 @@ in-page memory when manager storage APIs are not available.
 ## Report a Broken Site
 
 Unwall has not been tested on every website. If Unwall does not work on a
-specific site, please use the site report form:
+specific site, please report it using one of these options:
 
+- [Quick report without GitHub](https://forms.gle/excetAfqFE8Xufy49)
 - [Report a broken site](https://github.com/kelesmert/unwall/issues/new?template=site-not-working.yml)
 
 When possible, include the website URL, browser name, userscript manager, and a

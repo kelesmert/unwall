@@ -2,6 +2,8 @@ name: Site not working
 description: Report a website where Unwall does not work
 title: "[Site not working]: "
 labels: ["site-report"]
+assignees:
+  - kelesmert
 
 body:
   - type: input
