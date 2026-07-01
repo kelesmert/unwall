@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.8
+// @version      0.1.9
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
@@ -27,7 +27,7 @@
   "use strict";
 
   const APP_NAME = "Unwall";
-  const SCRIPT_VERSION = "0.1.8";
+  const SCRIPT_VERSION = "0.1.9";
   const INSTANCE_KEY = "__unwall";
   let previousInstance = null;
 
@@ -57,6 +57,9 @@
   const OBSERVER_MUTATION_BATCH_LIMIT = 80;
   const EVENT_HANDLER_RESTORE_MS = 250;
   const IGNORED_SIGNATURE_LIMIT = 100;
+  const DOWNLOAD_SLOT_SNAPSHOT_MS = 12000;
+  const DOWNLOAD_SLOT_SNAPSHOT_LIMIT = 8;
+  const REHYDRATION_LINK_LIMIT = 8;
   const CARD_FADE_MS = 1000;
   const UNDO_CARD_MS = 5000;
   const UNWALL_ROOT_SELECTOR = "[data-unwall-root]";
@@ -122,6 +125,7 @@
       tablePopupCount: "Popups",
       tableBackdropCount: "Backdrops",
       tableBlurCount: "Blur elements",
+      tableInlineGateCount: "Inline gates",
       tableScrollLock: "Scroll lock",
       tableTextSignals: "Text signals",
       tableDomSignals: "DOM signals",
@@ -129,6 +133,11 @@
       resultPopupHidden: "Hidden popups",
       resultBackdropHidden: "Hidden backdrops",
       resultBlurFixed: "Fixed blur",
+      resultInlineGateHidden: "Hidden inline gates",
+      resultResidualNoticeHidden: "Hidden residual notices",
+      resultControlsRevealed: "Revealed controls",
+      resultControlsRehydrated: "Rehydrated controls",
+      resultRehydrationReason: "Rehydration reason",
       resultCSSScrollLock: "CSS scroll lock",
       resultJSScrollLock: "JS scroll lock"
     },
@@ -171,6 +180,7 @@
       tablePopupCount: "Popup",
       tableBackdropCount: "Backdrop",
       tableBlurCount: "Blur elementi",
+      tableInlineGateCount: "Satır içi engel",
       tableScrollLock: "Scroll kilidi",
       tableTextSignals: "Metin sinyali",
       tableDomSignals: "DOM sinyali",
@@ -178,6 +188,11 @@
       resultPopupHidden: "Gizlenen popup",
       resultBackdropHidden: "Gizlenen backdrop",
       resultBlurFixed: "Düzeltilen blur",
+      resultInlineGateHidden: "Gizlenen satır içi engel",
+      resultResidualNoticeHidden: "Gizlenen artık uyarı",
+      resultControlsRevealed: "Açılan kontroller",
+      resultControlsRehydrated: "Yeniden oluşturulan kontroller",
+      resultRehydrationReason: "Yeniden oluşturma nedeni",
       resultCSSScrollLock: "CSS scroll kilidi",
       resultJSScrollLock: "JS scroll kilidi"
     },
@@ -220,6 +235,7 @@
       tablePopupCount: "Окна",
       tableBackdropCount: "Фоны",
       tableBlurCount: "Размытие",
+      tableInlineGateCount: "Встроенные блоки",
       tableScrollLock: "Блокировка прокрутки",
       tableTextSignals: "Текстовые сигналы",
       tableDomSignals: "DOM-сигналы",
@@ -227,6 +243,11 @@
       resultPopupHidden: "Скрыто окон",
       resultBackdropHidden: "Скрыто фонов",
       resultBlurFixed: "Исправлено размытие",
+      resultInlineGateHidden: "Скрыто встроенных блоков",
+      resultResidualNoticeHidden: "Скрыто остаточных уведомлений",
+      resultControlsRevealed: "Открыто элементов",
+      resultControlsRehydrated: "Восстановлено элементов",
+      resultRehydrationReason: "Причина восстановления",
       resultCSSScrollLock: "CSS-блокировка прокрутки",
       resultJSScrollLock: "JS-блокировка прокрутки"
     }
@@ -238,11 +259,17 @@
 
   const antiAdblockPatternSets = {
     en: [
+      /ad[-\s]*block(?:er|ing)?.{0,40}(?:detected|enabled|active)/i,
       /ad\s*block(?:er)?.{0,40}(?:detected|enabled|active)/i,
+      /(?:detected|enabled|active).{0,40}ad[-\s]*block(?:er|ing)?/i,
       /(?:detected|enabled|active).{0,40}ad\s*block(?:er)?/i,
+      /disable.{0,50}(?:your )?(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner)/i,
       /disable.{0,40}(?:your )?ad\s*block(?:er|ing)?/i,
+      /turn off.{0,50}(?:your )?(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner)/i,
       /turn off.{0,40}ad\s*block(?:er|ing)?/i,
+      /please.{0,40}(?:disable|turn off).{0,50}(?:ad[-\s]*block|anti[-\s]*banner)/i,
       /please.{0,40}(?:disable|turn off).{0,40}ad\s*block/i,
+      /(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner).{0,80}(?:site|download|refresh|access)/i,
       /whitelist.{0,40}(?:this )?(?:site|website)/i,
       /allow.{0,40}ads.{0,40}(?:continue|access|support)/i
     ],
@@ -269,12 +296,32 @@
   ];
 
   const antiAdblockAttributePatterns = [
+    /\bad[-\s]*block(?:er|ing)?\b/i,
     /\bad\s*block(?:er|ing)?\b/i,
     /\badblock(?:er|ing)?\b/i,
+    /\banti[-\s]*banner\b/i,
+    /\banti[-\s]*ad[-\s]*block(?:er|ing)?\b/i,
     /\banti\s*ad\s*block(?:er|ing)?\b/i,
+    /\bad[-\s]*block(?:er|ing)?\s*(?:overlay|modal|popup|wall|notice|detect|detected|download|refresh)\b/i,
     /\bad\s*block(?:er|ing)?\s*(?:overlay|modal|popup|wall|notice|detect|detected)\b/i,
+    /\b(?:overlay|modal|popup|wall|notice|download|refresh)\s*(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner)\b/i,
     /\b(?:overlay|modal|popup|wall|notice)\s*ad\s*block(?:er|ing)?\b/i
   ];
+
+  const inlineGateContextPattern =
+    /(?:download|downloaded|refresh|reload|site|access|continue|allow|whitelist|support|indir|yenile|eri[şs]im|devam|скач|загруз|обнов|доступ)/i;
+
+  const downloadControlTokenPattern =
+    /(?:download|downloaded|downlink|file|firmware|rom|mirror|indir|yükle|yukle|скач|загруз)/i;
+
+  const rehydrationControlTokenPattern =
+    /(?:download|downloaded|downlink|file|firmware|rom|mirror|server|redirect|tok=|wp-content\/uploads|\.zip\b|\.rar\b|\.7z\b|\.img\b|\.bin\b|\.tar\b|\.gz\b|\.xz\b|\.apk\b|\.exe\b|\.msi\b|\.dmg\b|\.iso\b|\.rom\b|\.pac\b|indir|yükle|yukle|скач|загруз)/i;
+
+  const broadRehydrationSourceTokenPattern =
+    /(?:\bnav(?:igation)?\b|\bmenu\b|\bcategory\b|\bcategories\b|\bcat[-_\s]*item\b|\bbreadcrumb\b|\bheader\b|\bfooter\b|\bsidebar\b|\bwidget\b|\barchive\b|\btaxonomy\b|\bpagination\b|\bpage[-_\s]*numbers\b|\bsocial\b|\bshare\b|\brelated\b|\bpopular\b|\blatest\b)/i;
+
+  const residualInlineNoticePattern =
+    /(?:advertisement|advertisements|advertising|ad revenue|living on ads|living on advertisement|lives on ads|lives on advertisement|support.{0,40}ads|ads.{0,40}support|thank you|reklam|te[şs]ekkür|спасибо|реклам)/i;
 
   const protectedSelector = [
     "video",
@@ -368,6 +415,10 @@
     ignoredSignatureQueue: [],
     lastDetection: null,
     lastRestore: null,
+    snapshotObserver: null,
+    snapshotTimer: null,
+    downloadSlotSnapshots: [],
+    downloadSlotSnapshotKeys: new Set(),
     globalDetection: true,
     siteModes: {},
     siteMode: MODES.default,
@@ -860,6 +911,241 @@
     return null;
   }
 
+  function hasInlineGateContext(element) {
+    const text = normalizedText(element);
+    const signalText = getAttributeSignalText(element);
+
+    return (
+      inlineGateContextPattern.test(text) ||
+      inlineGateContextPattern.test(signalText)
+    );
+  }
+
+  function isInlineGateBoundary(element) {
+    if (!(element instanceof Element)) {
+      return true;
+    }
+
+    return [
+      "html",
+      "body",
+      "main",
+      "article",
+      "form"
+    ].includes(element.tagName.toLowerCase());
+  }
+
+  function looksLikeInlineGate(element) {
+    if (
+      !(element instanceof Element) ||
+      isInUnwallUI(element) ||
+      isInlineGateBoundary(element) ||
+      containsProtectedContent(element) ||
+      !isVisible(element) ||
+      !hasAntiAdblockSignal(element) ||
+      !hasInlineGateContext(element)
+    ) {
+      return false;
+    }
+
+    const text = normalizedText(element);
+    const styleSignals = inlineGateNoticeStyleSignals(element);
+    const noticeStyled =
+      styleSignals.hasBackground &&
+      styleSignals.hasPadding &&
+      (
+        styleSignals.hasLeftBorder ||
+        styleSignals.hasBorder
+      );
+    const maxTextLength = noticeStyled ? 1200 : 900;
+
+    if (text.length < 12 || text.length > maxTextLength) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const { width, height } = viewportSize();
+    const maxInlineWidth =
+      noticeStyled
+        ? Math.min(width * 0.98, 1400)
+        : Math.min(width * 0.95, 900);
+
+    const boundedWidth =
+      rect.width >= 80 &&
+      rect.width <= maxInlineWidth;
+
+    const boundedHeight =
+      rect.height >= 12 &&
+      rect.height <= Math.min(height * 0.8, 320);
+
+    return boundedWidth && boundedHeight;
+  }
+
+  function inlineGateNoticeStyleSignals(element) {
+    const style = getComputedStyle(element);
+    const borderWidths = [
+      style.borderTopWidth,
+      style.borderRightWidth,
+      style.borderBottomWidth,
+      style.borderLeftWidth
+    ].map(value => parseFloat(value) || 0);
+    const paddings = [
+      style.paddingTop,
+      style.paddingRight,
+      style.paddingBottom,
+      style.paddingLeft
+    ].map(value => parseFloat(value) || 0);
+
+    return {
+      hasBackground: getColorAlpha(style.backgroundColor) > 0.04,
+      hasBorder: borderWidths.some(width => width >= 1),
+      hasLeftBorder: borderWidths[3] >= 2,
+      hasPadding: paddings.some(padding => padding >= 6)
+    };
+  }
+
+  function inlineGateSignalLineCount(element) {
+    const nodes = [element];
+
+    try {
+      nodes.push(
+        ...[...element.querySelectorAll("p,span,div,section,aside,strong,b,em,small,li")]
+          .slice(0, 80)
+      );
+    } catch {}
+
+    const lines = new Set();
+
+    for (const node of nodes) {
+      if (!(node instanceof Element) || !isVisible(node)) {
+        continue;
+      }
+
+      const text = normalizedText(node);
+
+      if (!text || text.length > 900) {
+        continue;
+      }
+
+      if (!hasAntiAdblockSignal(node) && !hasResidualInlineNoticeSignal(node)) {
+        continue;
+      }
+
+      const rect = node.getBoundingClientRect();
+      lines.add(`${Math.round(rect.top)}:${text.slice(0, 100)}`);
+    }
+
+    return lines.size;
+  }
+
+  function inlineGateCandidateScore(element, warningElement) {
+    if (!looksLikeInlineGate(element)) {
+      return -Infinity;
+    }
+
+    const text = normalizedText(element);
+    const styleSignals = inlineGateNoticeStyleSignals(element);
+    const lineCount = inlineGateSignalLineCount(element);
+    const rect = element.getBoundingClientRect();
+    const tag = element.tagName.toLowerCase();
+    let score = 0;
+
+    if (element.contains(warningElement)) {
+      score += 8;
+    }
+
+    if (element !== warningElement) {
+      score += 10;
+    }
+
+    if (lineCount >= 2) {
+      score += 22 + Math.min(lineCount, 5) * 3;
+    }
+
+    if (hasResidualInlineNoticeSignal(element)) {
+      score += 10;
+    }
+
+    if (styleSignals.hasBackground) {
+      score += 12;
+    }
+
+    if (styleSignals.hasLeftBorder) {
+      score += 16;
+    } else if (styleSignals.hasBorder) {
+      score += 8;
+    }
+
+    if (styleSignals.hasPadding) {
+      score += 10;
+    }
+
+    if (rect.width >= 180) {
+      score += 4;
+    }
+
+    if (rect.height >= 32) {
+      score += 6;
+    }
+
+    if (containsVisibleControl(element)) {
+      score -= 18;
+    }
+
+    if (text.length > 700) {
+      score -= 10;
+    }
+
+    if (
+      tag === "span" &&
+      lineCount <= 1 &&
+      !styleSignals.hasBackground &&
+      !styleSignals.hasBorder &&
+      !styleSignals.hasPadding
+    ) {
+      score -= 30;
+    }
+
+    return score;
+  }
+
+  function findInlineGate(element) {
+    let current = element;
+    const candidates = [];
+
+    while (
+      current &&
+      current !== document.body &&
+      current !== document.documentElement
+    ) {
+      if (looksLikeInlineGate(current)) {
+        candidates.push({
+          element: current,
+          score: inlineGateCandidateScore(current, element)
+        });
+      }
+
+      if (isInlineGateBoundary(current.parentElement)) {
+        break;
+      }
+
+      current = current.parentElement;
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0]?.score > -Infinity
+      ? candidates[0].element
+      : null;
+  }
+
+  function elementOverlapsAny(element, elements) {
+    return elements.some(other =>
+      other === element ||
+      other.contains(element) ||
+      element.contains(other)
+    );
+  }
+
   function getColorAlpha(color) {
     if (!color || color === "transparent") {
       return 0;
@@ -1038,6 +1324,17 @@
     return [...new Set(elements)].filter(Boolean);
   }
 
+  function uniqueOutermostElements(elements) {
+    const unique = uniqueElements(elements);
+
+    return unique.filter(element =>
+      !unique.some(other =>
+        other !== element &&
+        other.contains(element)
+      )
+    );
+  }
+
   function viewportSize() {
     return {
       width:
@@ -1192,7 +1489,1417 @@
     );
   }
 
-  function makeSignature(warningElements, popups) {
+  function isSafeInlineRevealScope(element) {
+    if (
+      !(element instanceof Element) ||
+      isInUnwallUI(element) ||
+      isInlineGateBoundary(element) ||
+      containsProtectedContent(element)
+    ) {
+      return false;
+    }
+
+    const text = normalizedText(element);
+
+    if (text.length > 3000) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const { width } = viewportSize();
+
+    return (
+      rect.width === 0 ||
+      rect.height === 0 ||
+      (
+        rect.width <= width * 0.98 &&
+        rect.height <= 600
+      )
+    );
+  }
+
+  function inlineRevealScopes(inlineGate) {
+    const scopes = new Set();
+    const parent = inlineGate.parentElement;
+
+    if (isSafeInlineRevealScope(parent)) {
+      scopes.add(parent);
+    }
+
+    for (const sibling of [
+      inlineGate.previousElementSibling,
+      inlineGate.nextElementSibling,
+      parent?.previousElementSibling,
+      parent?.nextElementSibling
+    ]) {
+      if (isSafeInlineRevealScope(sibling)) {
+        scopes.add(sibling);
+      }
+    }
+
+    return [...scopes];
+  }
+
+  function hiddenOrDisabled(element) {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+
+    const style = getComputedStyle(element);
+
+    return (
+      element.hasAttribute("hidden") ||
+      element.getAttribute("aria-hidden") === "true" ||
+      element.hasAttribute("disabled") ||
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.visibility === "collapse" ||
+      Number(style.opacity || 1) <= 0.02 ||
+      style.pointerEvents === "none"
+    );
+  }
+
+  function downloadControlSignal(element) {
+    return normalizedSignalText([
+      element.id,
+      element.className,
+      element.getAttribute?.("name"),
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title"),
+      element.getAttribute?.("href"),
+      element.getAttribute?.("download"),
+      element.getAttribute?.("onclick"),
+      element.getAttribute?.("data-key"),
+      normalizedText(element).slice(0, 160)
+    ].join(" "));
+  }
+
+  function looksLikeDownloadControl(element, detection) {
+    if (
+      !(element instanceof Element) ||
+      isInUnwallUI(element) ||
+      containsProtectedContent(element) ||
+      elementOverlapsAny(element, detection.inlineGates)
+    ) {
+      return false;
+    }
+
+    const tag = element.tagName.toLowerCase();
+    const role = element.getAttribute("role");
+    const controlLike =
+      tag === "a" ||
+      tag === "button" ||
+      role === "button" ||
+      element.hasAttribute("download") ||
+      element.hasAttribute("href");
+
+    return (
+      controlLike &&
+      hiddenOrDisabled(element) &&
+      downloadControlTokenPattern.test(downloadControlSignal(element))
+    );
+  }
+
+  function looksLikeDownloadControlCandidate(element, detection) {
+    if (
+      !(element instanceof Element) ||
+      isInUnwallUI(element) ||
+      containsProtectedContent(element) ||
+      elementOverlapsAny(element, detection.inlineGates)
+    ) {
+      return false;
+    }
+
+    const tag = element.tagName.toLowerCase();
+    const role = element.getAttribute("role");
+    const controlLike =
+      tag === "a" ||
+      tag === "button" ||
+      role === "button" ||
+      element.hasAttribute("download") ||
+      element.hasAttribute("href") ||
+      element.hasAttribute("onclick") ||
+      element.hasAttribute("data-key");
+
+    return (
+      controlLike &&
+      downloadControlTokenPattern.test(downloadControlSignal(element))
+    );
+  }
+
+  function containsDownloadControlCandidate(element, detection) {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+
+    try {
+      return [
+        ...element.querySelectorAll(
+          'a,button,[role="button"],[download],[href],[onclick],[data-key]'
+        )
+      ]
+        .slice(0, 120)
+        .some(candidate =>
+          looksLikeDownloadControlCandidate(candidate, detection)
+        );
+    } catch {
+      return false;
+    }
+  }
+
+  function looksLikeHiddenDownloadScope(element, detection) {
+    return (
+      element instanceof Element &&
+      !isInUnwallUI(element) &&
+      !containsProtectedContent(element) &&
+      !elementOverlapsAny(element, detection.inlineGates) &&
+      hiddenOrDisabled(element) &&
+      containsDownloadControlCandidate(element, detection)
+    );
+  }
+
+  function defaultDisplayFor(element) {
+    const tag = element.tagName.toLowerCase();
+
+    return ["a", "button", "span"].includes(tag)
+      ? "inline-block"
+      : "block";
+  }
+
+  function revealInlineControl(element, restore) {
+    let changed = false;
+    const style = getComputedStyle(element);
+
+    if (element.hasAttribute("hidden")) {
+      restore.setAttribute(element, "hidden", null);
+      changed = true;
+    }
+
+    if (element.getAttribute("aria-hidden") === "true") {
+      restore.setAttribute(element, "aria-hidden", "false");
+      changed = true;
+    }
+
+    if (element.hasAttribute("disabled")) {
+      restore.setAttribute(element, "disabled", null);
+      changed = true;
+    }
+
+    if (style.display === "none") {
+      restore.setStyle(element, "display", defaultDisplayFor(element), "important");
+      changed = true;
+    }
+
+    if (
+      style.visibility === "hidden" ||
+      style.visibility === "collapse"
+    ) {
+      restore.setStyle(element, "visibility", "visible", "important");
+      changed = true;
+    }
+
+    if (Number(style.opacity || 1) <= 0.02) {
+      restore.setStyle(element, "opacity", "1", "important");
+      changed = true;
+    }
+
+    if (style.pointerEvents === "none") {
+      restore.setStyle(element, "pointer-events", "auto", "important");
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  function revealInlineGateControls(detection, restore) {
+    const candidates = new Set();
+
+    for (const inlineGate of detection.inlineGates) {
+      for (const scope of inlineRevealScopes(inlineGate)) {
+        candidates.add(scope);
+
+        try {
+          for (const element of [
+            ...scope.querySelectorAll(
+              'a,button,[role="button"],[download],[href],[class],[id],[aria-label],[title]'
+            )
+          ].slice(0, 120)) {
+            candidates.add(element);
+          }
+        } catch {}
+      }
+    }
+
+    let revealedCount = 0;
+
+    for (const element of candidates) {
+      if (
+        (
+          looksLikeDownloadControl(element, detection) ||
+          looksLikeHiddenDownloadScope(element, detection)
+        ) &&
+        revealInlineControl(element, restore)
+      ) {
+        revealedCount += 1;
+      }
+    }
+
+    return revealedCount;
+  }
+
+  function cssEscape(value) {
+    try {
+      if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+        return CSS.escape(value);
+      }
+    } catch {}
+
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  }
+
+  function elementAndDescendants(element, selector) {
+    const elements = [];
+
+    if (element.matches?.(selector)) {
+      elements.push(element);
+    }
+
+    try {
+      elements.push(...element.querySelectorAll(selector));
+    } catch {}
+
+    return elements;
+  }
+
+  function extractWindowOpenTarget(value) {
+    const match = String(value || "").match(
+      /window\.open\s*\(\s*(['"])(.*?)\1/i
+    );
+
+    return match?.[2] || "";
+  }
+
+  function safeNavigationUrl(value, baseUrl = location.href) {
+    const rawValue = String(value || "").trim();
+
+    if (
+      !rawValue ||
+      /^(?:javascript|data|blob|about):/i.test(rawValue)
+    ) {
+      return null;
+    }
+
+    try {
+      const url = new URL(rawValue, baseUrl);
+
+      return ["http:", "https:"].includes(url.protocol)
+        ? url
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function rehydrationSourceText(element) {
+    return normalizedSignalText([
+      normalizedText(element).slice(0, 800),
+      element.id,
+      element.className
+    ].join(" "));
+  }
+
+  function sourceSlotHasDownloadContext(element) {
+    return rehydrationControlTokenPattern.test(
+      rehydrationSourceText(element)
+    );
+  }
+
+  function rehydrationSourceSignal(element) {
+    const parts = [];
+    let current = element;
+    let depth = 0;
+
+    while (
+      current &&
+      current instanceof Element &&
+      depth < 4
+    ) {
+      parts.push(
+        current.tagName,
+        current.id,
+        current.className,
+        current.getAttribute("role"),
+        current.getAttribute("aria-label")
+      );
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    return normalizedSignalText(parts.join(" "));
+  }
+
+  function hasBroadRehydrationSourceSignal(element) {
+    if (!(element instanceof Element)) {
+      return true;
+    }
+
+    const tag = element.tagName.toLowerCase();
+    const role = element.getAttribute("role");
+
+    return (
+      ["nav", "header", "footer"].includes(tag) ||
+      ["navigation", "menubar", "menu"].includes(role) ||
+      Boolean(element.closest?.("nav,header,footer,[role='navigation']")) ||
+      broadRehydrationSourceTokenPattern.test(
+        rehydrationSourceSignal(element)
+      )
+    );
+  }
+
+  function rehydrationSourceIsBounded(element) {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect?.();
+
+    if (!rect) {
+      return true;
+    }
+
+    const { width } = viewportSize();
+
+    return (
+      rect.width === 0 ||
+      rect.height === 0 ||
+      (
+        rect.width <= width * 0.98 &&
+        rect.height <= 520
+      )
+    );
+  }
+
+  function rehydrationElementKeys(element) {
+    if (!(element instanceof Element)) {
+      return [];
+    }
+
+    const tag = element.tagName.toLowerCase();
+    const keys = [];
+
+    if (element.id) {
+      keys.push(`#${element.id}`);
+      keys.push(`${tag}#${element.id}`);
+    }
+
+    const classes = [...element.classList].filter(Boolean);
+
+    if (classes.length > 0) {
+      keys.push(`.${classes.join(".")}`);
+      keys.push(`${tag}.${classes.join(".")}`);
+    }
+
+    return keys;
+  }
+
+  function rehydrationAncestorKeys(element) {
+    const keys = new Set();
+    let current = element;
+    let depth = 0;
+
+    while (
+      current &&
+      current instanceof Element &&
+      current !== document.documentElement &&
+      depth < 6
+    ) {
+      for (const key of rehydrationElementKeys(current)) {
+        keys.add(key);
+      }
+
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    return [...keys];
+  }
+
+  function rehydrationLinkData(anchor) {
+    if (!(anchor instanceof Element)) {
+      return null;
+    }
+
+    const href = anchor.getAttribute("href") || "";
+    const onclickTarget = extractWindowOpenTarget(
+      anchor.getAttribute("onclick")
+    );
+    const target =
+      href && !/^javascript:/i.test(href) && href !== "#"
+        ? href
+        : onclickTarget;
+
+    if (String(target || "").trim().startsWith("#")) {
+      return null;
+    }
+
+    const url = safeNavigationUrl(target);
+
+    if (!url) {
+      return null;
+    }
+
+    if (
+      url.hash &&
+      url.origin === location.origin &&
+      url.pathname === location.pathname &&
+      url.search === location.search
+    ) {
+      return null;
+    }
+
+    const signal = normalizedSignalText([
+      anchor.id,
+      anchor.className,
+      anchor.getAttribute("name"),
+      anchor.getAttribute("aria-label"),
+      anchor.getAttribute("title"),
+      anchor.getAttribute("download"),
+      href,
+      onclickTarget,
+      url.href,
+      normalizedText(anchor).slice(0, 180)
+    ].join(" "));
+
+    const hasDirectSignal =
+      rehydrationControlTokenPattern.test(signal);
+
+    if (!hasDirectSignal) {
+      return null;
+    }
+
+    return {
+      href: url.href,
+      text: normalizedText(anchor).slice(0, 160),
+      title: anchor.getAttribute("title") || "",
+      download: anchor.getAttribute("download") || ""
+    };
+  }
+
+  function rehydrationLinkDataList(sourceSlot) {
+    const anchors = elementAndDescendants(sourceSlot, "a");
+    const entries = [];
+
+    anchors.forEach((anchor, index) => {
+      const data = rehydrationLinkData(anchor, sourceSlot);
+
+      if (data) {
+        entries.push({
+          index,
+          anchor,
+          data
+        });
+      }
+    });
+
+    return entries;
+  }
+
+  function liveRehydrationSlots(inlineGate) {
+    const slots = [];
+    let current = inlineGate.parentElement;
+    let depth = 0;
+
+    while (
+      current &&
+      current !== document.body &&
+      current !== document.documentElement &&
+      depth < 4
+    ) {
+      if (isSafeInlineRevealScope(current)) {
+        slots.push({
+          element: current,
+          depth
+        });
+      }
+
+      if (isInlineGateBoundary(current.parentElement)) {
+        break;
+      }
+
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    return slots;
+  }
+
+  function sourceSelectorsForLiveSlot(element) {
+    const tag = element.tagName.toLowerCase();
+    const selectors = [];
+
+    if (element.id) {
+      selectors.push(`#${cssEscape(element.id)}`);
+    }
+
+    const classes = [...element.classList]
+      .filter(Boolean)
+      .slice(0, 3);
+
+    if (classes.length > 0) {
+      selectors.push(
+        `${tag}${classes.map(className => `.${cssEscape(className)}`).join("")}`
+      );
+
+      for (const className of classes) {
+        selectors.push(`.${cssEscape(className)}`);
+      }
+    }
+
+    return uniqueElements(selectors);
+  }
+
+  function sourceSlotsForLiveSlot(liveSlot, sourceDocument) {
+    const selectors = sourceSelectorsForLiveSlot(liveSlot);
+    const candidates = [];
+
+    for (const selector of selectors) {
+      try {
+        for (const element of [
+          ...sourceDocument.querySelectorAll(selector)
+        ].slice(0, 30)) {
+          candidates.push(element);
+        }
+      } catch {}
+    }
+
+    return uniqueElements(candidates);
+  }
+
+  function rehydrationSourceRejectionReason(element) {
+    if (
+      !(element instanceof Element) ||
+      containsProtectedContent(element) ||
+      hasAntiAdblockSignal(element)
+    ) {
+      return "protected-or-wall-source";
+    }
+
+    if (hasBroadRehydrationSourceSignal(element)) {
+      return "rejected-broad-source";
+    }
+
+    const text = normalizedText(element);
+
+    if (text.length < 4) {
+      return "empty-source";
+    }
+
+    if (text.length > 1400) {
+      return "rejected-broad-source";
+    }
+
+    if (!rehydrationSourceIsBounded(element)) {
+      return "rejected-broad-source";
+    }
+
+    const links = rehydrationLinkDataList(element);
+
+    if (links.length === 0) {
+      return "no-source-controls";
+    }
+
+    if (links.length > REHYDRATION_LINK_LIMIT) {
+      return "rejected-broad-source";
+    }
+
+    if (!sourceSlotHasDownloadContext(element)) {
+      return "no-source-controls";
+    }
+
+    return "";
+  }
+
+  function looksLikeRehydrationSourceSlot(element) {
+    return !rehydrationSourceRejectionReason(element);
+  }
+
+  function scoreRehydrationSourceSlot(sourceSlot, liveSlot, depth) {
+    const links = rehydrationLinkDataList(sourceSlot);
+    let score = links.length * 25;
+
+    if (liveSlot.id && sourceSlot.id === liveSlot.id) {
+      score += 25;
+    }
+
+    const liveClasses = [...liveSlot.classList];
+    const sharedClassCount = liveClasses.filter(className =>
+      sourceSlot.classList.contains(className)
+    ).length;
+
+    score += sharedClassCount * 28;
+    score -= depth * 8;
+
+    const textLength = normalizedText(sourceSlot).length;
+
+    if (textLength < 900) {
+      score += 12;
+    }
+
+    if (sourceSlot.tagName === liveSlot.tagName) {
+      score += 8;
+    }
+
+    return score;
+  }
+
+  function scoreSnapshotSlotCandidate(element, depth) {
+    const links = rehydrationLinkDataList(element);
+    const signal = rehydrationSourceSignal(element);
+    let score = links.length * 35;
+
+    if (rehydrationControlTokenPattern.test(signal)) {
+      score += 18;
+    }
+
+    if (element.id || element.classList.length > 0) {
+      score += 12;
+    }
+
+    if (["li", "div", "section"].includes(element.tagName.toLowerCase())) {
+      score += 6;
+    }
+
+    const textLength = normalizedText(element).length;
+
+    if (textLength < 700) {
+      score += 10;
+    }
+
+    return score - depth * 6;
+  }
+
+  function snapshotSlotCandidatesForAnchor(anchor) {
+    const candidates = [];
+    let current = anchor.parentElement;
+    let depth = 0;
+
+    while (
+      current &&
+      current !== document.body &&
+      current !== document.documentElement &&
+      depth < 5
+    ) {
+      if (
+        !current.querySelector?.("[data-unwall-rehydrated-controls]") &&
+        isVisible(current) &&
+        looksLikeRehydrationSourceSlot(current)
+      ) {
+        candidates.push({
+          element: current,
+          score: scoreSnapshotSlotCandidate(current, depth)
+        });
+      }
+
+      if (isInlineGateBoundary(current.parentElement)) {
+        break;
+      }
+
+      current = current.parentElement;
+      depth += 1;
+    }
+
+    return candidates;
+  }
+
+  function rememberDownloadSlotSnapshot(element) {
+    const linkData = rehydrationLinkDataList(element);
+
+    if (
+      linkData.length === 0 ||
+      linkData.length > REHYDRATION_LINK_LIMIT
+    ) {
+      return;
+    }
+
+    const key = linkData
+      .map(entry => `${entry.data.href}|${entry.data.text}`)
+      .join("||");
+
+    if (!key || state.downloadSlotSnapshotKeys.has(key)) {
+      return;
+    }
+
+    state.downloadSlotSnapshotKeys.add(key);
+    state.downloadSlotSnapshots.push({
+      sourceSlot: element.cloneNode(true),
+      linkData,
+      text: normalizedText(element).slice(0, 500),
+      ancestorKeys: rehydrationAncestorKeys(element),
+      createdAt: Date.now()
+    });
+
+    while (state.downloadSlotSnapshots.length > DOWNLOAD_SLOT_SNAPSHOT_LIMIT) {
+      const removed = state.downloadSlotSnapshots.shift();
+      const removedKey = removed?.linkData
+        ?.map(entry => `${entry.data.href}|${entry.data.text}`)
+        .join("||");
+
+      if (removedKey) {
+        state.downloadSlotSnapshotKeys.delete(removedKey);
+      }
+    }
+  }
+
+  function captureDownloadSlotSnapshots() {
+    if (!document.body || state.stopped) {
+      return;
+    }
+
+    const anchors = [
+      ...document.querySelectorAll("a[href],a[onclick]")
+    ].slice(0, 220);
+    const candidates = [];
+
+    for (const anchor of anchors) {
+      if (
+        isInUnwallUI(anchor) ||
+        anchor.closest?.("[data-unwall-rehydrated-controls]") ||
+        anchor.closest?.(protectedSelector) ||
+        hasBroadRehydrationSourceSignal(anchor) ||
+        containsProtectedContent(anchor) ||
+        !isVisible(anchor) ||
+        !rehydrationLinkData(anchor)
+      ) {
+        continue;
+      }
+
+      candidates.push(...snapshotSlotCandidatesForAnchor(anchor));
+    }
+
+    candidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, DOWNLOAD_SLOT_SNAPSHOT_LIMIT)
+      .forEach(candidate => rememberDownloadSlotSnapshot(candidate.element));
+  }
+
+  function stopDownloadSlotSnapshotObserver() {
+    state.snapshotObserver?.disconnect();
+    state.snapshotObserver = null;
+
+    if (state.snapshotTimer) {
+      window.clearTimeout(state.snapshotTimer);
+      state.snapshotTimer = null;
+    }
+  }
+
+  function startDownloadSlotSnapshotObserver() {
+    captureDownloadSlotSnapshots();
+
+    if (
+      state.snapshotObserver ||
+      !document.documentElement
+    ) {
+      return;
+    }
+
+    const observer = new MutationObserver(mutations => {
+      if (
+        state.suppressObserver ||
+        !mutations.some(mutation => mutation.type === "childList")
+      ) {
+        return;
+      }
+
+      window.setTimeout(captureDownloadSlotSnapshots, 0);
+    });
+
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+
+    state.snapshotObserver = observer;
+    state.snapshotTimer = window.setTimeout(
+      stopDownloadSlotSnapshotObserver,
+      DOWNLOAD_SLOT_SNAPSHOT_MS
+    );
+  }
+
+  function scoreSnapshotRehydrationPlan(snapshot, liveSlot) {
+    const liveKeys = rehydrationAncestorKeys(liveSlot.element);
+    const relatedKeyCount = snapshot.ancestorKeys.filter(key =>
+      liveKeys.includes(key)
+    ).length;
+
+    if (relatedKeyCount === 0) {
+      return 0;
+    }
+
+    let score = snapshot.linkData.length * 40;
+    score += relatedKeyCount * 45;
+    score -= liveSlot.depth * 10;
+
+    if (snapshot.text.length < 700) {
+      score += 10;
+    }
+
+    return score;
+  }
+
+  function findSnapshotRehydrationSource(detection) {
+    captureDownloadSlotSnapshots();
+
+    const plans = [];
+
+    for (const inlineGate of detection.inlineGates) {
+      for (const liveSlot of liveRehydrationSlots(inlineGate)) {
+        if (liveSlot.element.querySelector("[data-unwall-rehydrated-controls]")) {
+          continue;
+        }
+
+        for (const snapshot of state.downloadSlotSnapshots) {
+          const rejection =
+            rehydrationSourceRejectionReason(snapshot.sourceSlot);
+
+          if (rejection) {
+            continue;
+          }
+
+          const score =
+            scoreSnapshotRehydrationPlan(snapshot, liveSlot);
+
+          if (score <= 0) {
+            continue;
+          }
+
+          plans.push({
+            inlineGate,
+            targetSlot: liveSlot.element,
+            sourceSlot: snapshot.sourceSlot,
+            linkData: snapshot.linkData,
+            source: "snapshot-source",
+            score
+          });
+        }
+      }
+    }
+
+    plans.sort((a, b) => b.score - a.score);
+    return plans[0] || null;
+  }
+
+  function findRehydrationSource(detection, sourceDocument) {
+    const plans = [];
+    let sawBroadSource = false;
+
+    for (const inlineGate of detection.inlineGates) {
+      for (const liveSlot of liveRehydrationSlots(inlineGate)) {
+        if (liveSlot.element.querySelector("[data-unwall-rehydrated-controls]")) {
+          continue;
+        }
+
+        for (const sourceSlot of sourceSlotsForLiveSlot(
+          liveSlot.element,
+          sourceDocument
+        )) {
+          const rejection =
+            rehydrationSourceRejectionReason(sourceSlot);
+
+          if (rejection) {
+            sawBroadSource =
+              sawBroadSource ||
+              rejection === "rejected-broad-source";
+            continue;
+          }
+
+          plans.push({
+            inlineGate,
+            targetSlot: liveSlot.element,
+            sourceSlot,
+            linkData: rehydrationLinkDataList(sourceSlot),
+            source: "refetch-source",
+            score: scoreRehydrationSourceSlot(
+              sourceSlot,
+              liveSlot.element,
+              liveSlot.depth
+            )
+          });
+        }
+      }
+    }
+
+    plans.sort((a, b) => b.score - a.score);
+    return {
+      plan: plans[0] || null,
+      reason: plans[0]
+        ? "refetch-source"
+        : sawBroadSource
+          ? "rejected-broad-source"
+          : "no-source-controls"
+    };
+  }
+
+  function removeUnsafeAttributes(element) {
+    try {
+      for (const attribute of [...element.attributes]) {
+        if (
+          /^on/i.test(attribute.name) ||
+          attribute.name === "srcdoc" ||
+          attribute.name === "ping" ||
+          attribute.name === "id"
+        ) {
+          element.removeAttribute(attribute.name);
+        }
+      }
+    } catch {}
+  }
+
+  function sanitizeRehydratedClone(sourceSlot, linkData) {
+    const clone = document.importNode(sourceSlot, true);
+    const acceptedLinks = new Map(
+      linkData.map(entry => [entry.index, entry.data])
+    );
+
+    for (const element of elementAndDescendants(
+      clone,
+      "script,style,noscript,iframe,object,embed,canvas,video,audio,form,input,textarea,select"
+    )) {
+      element.remove();
+    }
+
+    for (const element of elementAndDescendants(clone, "*")) {
+      removeUnsafeAttributes(element);
+    }
+
+    const cloneAnchors = elementAndDescendants(clone, "a");
+
+    cloneAnchors.forEach((anchor, index) => {
+      const data = acceptedLinks.get(index);
+
+      if (!data) {
+        const text = normalizedText(anchor);
+        anchor.replaceWith(document.createTextNode(text));
+        return;
+      }
+
+      removeUnsafeAttributes(anchor);
+      anchor.setAttribute("href", data.href);
+      anchor.setAttribute("target", "_blank");
+      anchor.setAttribute("rel", "noopener nofollow");
+      anchor.setAttribute("referrerpolicy", "same-origin");
+
+      if (data.title) {
+        anchor.setAttribute("title", data.title);
+      }
+
+      if (data.download) {
+        anchor.setAttribute("download", data.download);
+      }
+    });
+
+    return clone;
+  }
+
+  function makeRehydratedFragment(plan) {
+    const wrapper = document.createElement("div");
+    const clone = sanitizeRehydratedClone(
+      plan.sourceSlot,
+      plan.linkData
+    );
+
+    wrapper.setAttribute("data-unwall-rehydrated-controls", "");
+    wrapper.setAttribute(
+      "data-unwall-rehydrated-source",
+      plan.source || "unknown-source"
+    );
+    wrapper.style.setProperty("display", "block", "important");
+    wrapper.style.setProperty("visibility", "visible", "important");
+    wrapper.style.setProperty("opacity", "1", "important");
+    wrapper.style.setProperty("pointer-events", "auto", "important");
+
+    if (clone.matches?.("a,button,[role='button']")) {
+      wrapper.appendChild(clone);
+    } else if (clone.childNodes.length > 0) {
+      while (clone.firstChild) {
+        wrapper.appendChild(clone.firstChild);
+      }
+    } else {
+      wrapper.appendChild(clone);
+    }
+
+    return wrapper;
+  }
+
+  async function rehydrateInlineGateControls(detection, restore) {
+    if (detection.inlineGates.length === 0) {
+      return {
+        count: 0,
+        reason: "no-inline-gates"
+      };
+    }
+
+    const snapshotPlan = findSnapshotRehydrationSource(detection);
+
+    if (snapshotPlan) {
+      const fragment = makeRehydratedFragment(snapshotPlan);
+
+      if (!normalizedText(fragment)) {
+        return {
+          count: 0,
+          reason: "empty-fragment"
+        };
+      }
+
+      restore.insertNode(snapshotPlan.targetSlot, fragment);
+
+      return {
+        count: snapshotPlan.linkData.length,
+        reason: "snapshot-source"
+      };
+    }
+
+    const requestUrl = new URL(location.href);
+
+    if (requestUrl.origin !== location.origin) {
+      return {
+        count: 0,
+        reason: "cross-origin-blocked"
+      };
+    }
+
+    let response;
+
+    try {
+      response = await fetch(requestUrl.href, {
+        credentials: "include",
+        cache: "no-store"
+      });
+    } catch (error) {
+      console.warn(`${APP_NAME}: inline rehydration fetch failed`, error);
+      return {
+        count: 0,
+        reason: "fetch-failed"
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        count: 0,
+        reason: `fetch-status-${response.status}`
+      };
+    }
+
+    let sourceDocument;
+
+    try {
+      const html = await response.text();
+      sourceDocument = new DOMParser().parseFromString(html, "text/html");
+    } catch (error) {
+      console.warn(`${APP_NAME}: inline rehydration parse failed`, error);
+      return {
+        count: 0,
+        reason: "parse-failed"
+      };
+    }
+
+    const sourceResult = findRehydrationSource(detection, sourceDocument);
+    const plan = sourceResult.plan;
+
+    if (!plan) {
+      return {
+        count: 0,
+        reason: sourceResult.reason
+      };
+    }
+
+    const fragment = makeRehydratedFragment(plan);
+
+    if (!normalizedText(fragment)) {
+      return {
+        count: 0,
+        reason: "empty-fragment"
+      };
+    }
+
+    restore.insertNode(plan.targetSlot, fragment);
+
+    return {
+      count: plan.linkData.length,
+      reason: "refetch-source"
+    };
+  }
+
+  function residualInlineNoticeSignal(element) {
+    return normalizedSignalText([
+      normalizedText(element).slice(0, 500),
+      element.id,
+      element.className,
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title")
+    ].join(" "));
+  }
+
+  function hasResidualInlineNoticeSignal(element) {
+    return residualInlineNoticePattern.test(
+      residualInlineNoticeSignal(element)
+    );
+  }
+
+  function isLocalToInlineGate(element, inlineGate) {
+    const parent = inlineGate.parentElement;
+
+    return Boolean(
+      parent &&
+      (
+        element === parent ||
+        element.parentElement === parent ||
+        parent.contains(element) ||
+        element === inlineGate.previousElementSibling ||
+        element === inlineGate.nextElementSibling ||
+        element === parent.previousElementSibling ||
+        element === parent.nextElementSibling ||
+        parent.previousElementSibling?.contains(element) ||
+        parent.nextElementSibling?.contains(element)
+      )
+    );
+  }
+
+  function containsVisibleControl(element) {
+    try {
+      return [...element.querySelectorAll("a,button,[role='button'],input,textarea,select")]
+        .some(isVisible);
+    } catch {
+      return false;
+    }
+  }
+
+  function looksLikeResidualInlineNotice(element, detection) {
+    if (
+      !(element instanceof Element) ||
+      !element.isConnected ||
+      element.hasAttribute("data-unwall-hidden") ||
+      isInUnwallUI(element) ||
+      isInlineGateBoundary(element) ||
+      containsProtectedContent(element) ||
+      elementOverlapsAny(element, detection.inlineGates) ||
+      !isVisible(element) ||
+      !hasResidualInlineNoticeSignal(element) ||
+      !detection.inlineGates.some(inlineGate =>
+        isLocalToInlineGate(element, inlineGate)
+      )
+    ) {
+      return false;
+    }
+
+    const text = normalizedText(element);
+
+    if (text.length < 8 || text.length > 700) {
+      return false;
+    }
+
+    if (containsVisibleControl(element)) {
+      return false;
+    }
+
+    const matchingChild = [...element.children].some(child =>
+      child instanceof Element &&
+      isVisible(child) &&
+      hasResidualInlineNoticeSignal(child)
+    );
+
+    if (matchingChild) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const { width, height } = viewportSize();
+
+    return (
+      rect.width >= 40 &&
+      rect.width <= Math.min(width * 0.95, 900) &&
+      rect.height >= 10 &&
+      rect.height <= Math.min(height * 0.8, 260)
+    );
+  }
+
+  function hideResidualInlineNotices(detection, restore) {
+    const candidates = new Set();
+
+    for (const inlineGate of detection.inlineGates) {
+      for (const scope of inlineRevealScopes(inlineGate)) {
+        candidates.add(scope);
+
+        try {
+          for (const element of [
+            ...scope.querySelectorAll("p,span,div,section,aside,strong,b,em,small")
+          ].slice(0, 120)) {
+            candidates.add(element);
+          }
+        } catch {}
+      }
+    }
+
+    let hiddenCount = 0;
+
+    for (const element of candidates) {
+      if (looksLikeResidualInlineNotice(element, detection)) {
+        restore.hideElement(element, "inline-residual-notice");
+        hiddenCount += 1;
+      }
+    }
+
+    return hiddenCount;
+  }
+
+  function visibleNormalizedText(element) {
+    if (!(element instanceof Element)) {
+      return "";
+    }
+
+    const parts = [];
+
+    try {
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+        {
+          acceptNode(node) {
+            const parent = node.parentElement;
+
+            if (
+              !parent ||
+              parent.closest?.(UNWALL_ROOT_SELECTOR) ||
+              parent.closest?.("[data-unwall-hidden]") ||
+              !isVisible(parent)
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+
+            return node.textContent.trim()
+              ? NodeFilter.FILTER_ACCEPT
+              : NodeFilter.FILTER_REJECT;
+          }
+        }
+      );
+
+      let node = walker.nextNode();
+
+      while (node) {
+        parts.push(node.textContent);
+        node = walker.nextNode();
+      }
+    } catch {
+      return normalizedText(element);
+    }
+
+    return parts.join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function hiddenInlineChildCount(element) {
+    try {
+      return [...element.querySelectorAll('[data-unwall-hidden*="inline"]')]
+        .filter(child => child !== element)
+        .length;
+    } catch {
+      return 0;
+    }
+  }
+
+  function looksLikeEmptyInlineGateShell(element) {
+    if (
+      !(element instanceof Element) ||
+      !element.isConnected ||
+      element.hasAttribute("data-unwall-hidden") ||
+      isInUnwallUI(element) ||
+      isInlineGateBoundary(element) ||
+      containsProtectedContent(element) ||
+      !isVisible(element) ||
+      containsVisibleControl(element) ||
+      hiddenInlineChildCount(element) === 0 ||
+      visibleNormalizedText(element).length > 3
+    ) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const { width, height } = viewportSize();
+    const boundedNoticeShell =
+      rect.width >= 40 &&
+      rect.width <= Math.min(width * 0.98, 1000) &&
+      rect.height >= 10 &&
+      rect.height <= Math.min(height * 0.85, 380);
+
+    if (!boundedNoticeShell) {
+      return false;
+    }
+
+    const styleSignals = inlineGateNoticeStyleSignals(element);
+
+    return (
+      styleSignals.hasBackground ||
+      styleSignals.hasBorder ||
+      styleSignals.hasPadding
+    );
+  }
+
+  function hideEmptyInlineGateShells(detection, restore) {
+    const anchors = new Set(detection.inlineGates);
+
+    try {
+      for (const element of [
+        ...document.querySelectorAll('[data-unwall-hidden*="inline"]')
+      ].slice(0, 120)) {
+        anchors.add(element);
+      }
+    } catch {}
+
+    const candidates = new Set();
+
+    for (const anchor of anchors) {
+      if (!(anchor instanceof Element)) {
+        continue;
+      }
+
+      let current = anchor.parentElement;
+
+      while (
+        current &&
+        current !== document.body &&
+        current !== document.documentElement
+      ) {
+        candidates.add(current);
+
+        if (isInlineGateBoundary(current.parentElement)) {
+          break;
+        }
+
+        current = current.parentElement;
+      }
+    }
+
+    const sortedCandidates = [...candidates].sort((a, b) => {
+      const rectA = a.getBoundingClientRect();
+      const rectB = b.getBoundingClientRect();
+      return (rectB.width * rectB.height) - (rectA.width * rectA.height);
+    });
+
+    let hiddenCount = 0;
+
+    for (const element of sortedCandidates) {
+      if (!looksLikeEmptyInlineGateShell(element)) {
+        continue;
+      }
+
+      restore.hideElement(element, "inline-empty-shell");
+      hiddenCount += 1;
+    }
+
+    return hiddenCount;
+  }
+
+  function makeSignature(warningElements, popups, inlineGates = []) {
     const textPart =
       warningElements
         .map(element => normalizedText(element).slice(0, 120))
@@ -1213,7 +2920,23 @@
         })
         .join("|");
 
-    return `${language}:${textPart}:${popupPart}`;
+    const inlinePart =
+      inlineGates
+        .map(element => {
+          const rect = element.getBoundingClientRect();
+          return [
+            element.tagName,
+            element.id,
+            String(element.className || "").slice(0, 80),
+            normalizedText(element).slice(0, 80),
+            Math.round(rect.width),
+            Math.round(rect.height)
+          ].join(":");
+        })
+        .join("|")
+        .slice(0, 320);
+
+    return `${language}:${textPart}:${popupPart}:${inlinePart}`;
   }
 
   function rememberIgnoredSignature(signature) {
@@ -1233,6 +2956,7 @@
   function scoreDetection({
     warningElements,
     popups,
+    inlineGates,
     backdrops,
     blurElements,
     scrollLock
@@ -1245,7 +2969,8 @@
 
     const hasAttributeSignal =
       warningElements.some(containsAntiAdblockAttribute) ||
-      popups.some(containsAntiAdblockAttribute);
+      popups.some(containsAntiAdblockAttribute) ||
+      inlineGates.some(containsAntiAdblockAttribute);
 
     if (hasTextSignal) {
       confidence += 70;
@@ -1255,6 +2980,16 @@
     if (hasAttributeSignal) {
       confidence += 58;
       reasons.push("anti-adblock-dom-signal");
+    }
+
+    if (inlineGates.length > 0) {
+      confidence += 10;
+      reasons.push("inline-access-gate");
+    }
+
+    if (inlineGates.some(hasInlineGateContext)) {
+      confidence += 10;
+      reasons.push("inline-download-context");
     }
 
     if (
@@ -1327,6 +3062,13 @@
         .map(findPopup)
         .filter(Boolean)
     );
+    const inlineGates = uniqueOutermostElements(
+      warningElements
+        .filter(warning => !elementOverlapsAny(warning, popups))
+        .map(findInlineGate)
+        .filter(Boolean)
+        .filter(inlineGate => !elementOverlapsAny(inlineGate, popups))
+    );
 
     const backdrops = uniqueElements(
       popups.flatMap(findBackdrop)
@@ -1349,6 +3091,7 @@
     const score = scoreDetection({
       warningElements,
       popups,
+      inlineGates,
       backdrops,
       blurElements,
       scrollLock
@@ -1356,17 +3099,18 @@
 
     const detection = {
       found:
-        popups.length > 0 &&
+        (popups.length > 0 || inlineGates.length > 0) &&
         score.confidence >= PROMPT_THRESHOLD,
       language,
       confidence: score.confidence,
       reasons: score.reasons,
       warningElements,
       popups,
+      inlineGates,
       backdrops,
       blurElements,
       scrollLock,
-      signature: makeSignature(warningElements, popups)
+      signature: makeSignature(warningElements, popups, inlineGates)
     };
 
     state.lastDetection = detection;
@@ -1431,6 +3175,15 @@
           element,
           value: element.getAttribute("class")
         });
+      },
+
+      insertNode(parent, node, before = null) {
+        records.push({
+          type: "inserted-node",
+          element: node
+        });
+
+        parent.insertBefore(node, before);
       },
 
       hideElement(element, reason) {
@@ -1510,6 +3263,10 @@
             }
 
             record.element.removeAttribute("data-unwall-hidden");
+          }
+
+          if (record.type === "inserted-node") {
+            record.element.remove();
           }
 
           if (record.type === "event-handlers") {
@@ -1663,6 +3420,7 @@
 
   async function cleanDetection(detection) {
     const restore = createRestoreSession();
+    captureDownloadSlotSnapshots();
     state.suppressObserver = true;
 
     try {
@@ -1672,6 +3430,34 @@
 
       for (const backdrop of detection.backdrops) {
         restore.hideElement(backdrop, "backdrop");
+      }
+
+      for (const inlineGate of detection.inlineGates) {
+        restore.hideElement(inlineGate, "inline-gate");
+      }
+
+      const revealedControlCount =
+        revealInlineGateControls(detection, restore);
+      const rehydrationResult =
+        revealedControlCount > 0
+          ? {
+              count: 0,
+              reason: "existing-controls-revealed"
+            }
+          : await rehydrateInlineGateControls(detection, restore);
+      let residualNoticeCount =
+        hideResidualInlineNotices(detection, restore) +
+        hideEmptyInlineGateShells(detection, restore);
+
+      if (detection.inlineGates.length > 0) {
+        await wait(120);
+        residualNoticeCount +=
+          hideResidualInlineNotices(detection, restore) +
+          hideEmptyInlineGateShells(detection, restore);
+        await wait(400);
+        residualNoticeCount +=
+          hideResidualInlineNotices(detection, restore) +
+          hideEmptyInlineGateShells(detection, restore);
       }
 
       for (const element of detection.blurElements) {
@@ -1702,6 +3488,11 @@
         popupCount: detection.popups.length,
         backdropCount: detection.backdrops.length,
         blurCount: detection.blurElements.length,
+        inlineGateCount: detection.inlineGates.length,
+        residualNoticeCount,
+        revealedControlCount,
+        rehydratedControlCount: rehydrationResult.count,
+        rehydrationReason: rehydrationResult.reason,
         cssScrollUnlocked,
         jsScrollUnlocked
       };
@@ -1993,6 +3784,11 @@
       [messages.resultPopupHidden]: result.popupCount,
       [messages.resultBackdropHidden]: result.backdropCount,
       [messages.resultBlurFixed]: result.blurCount,
+      [messages.resultInlineGateHidden]: result.inlineGateCount,
+      [messages.resultResidualNoticeHidden]: result.residualNoticeCount,
+      [messages.resultControlsRevealed]: result.revealedControlCount,
+      [messages.resultControlsRehydrated]: result.rehydratedControlCount,
+      [messages.resultRehydrationReason]: result.rehydrationReason,
       [messages.resultCSSScrollLock]: result.cssScrollUnlocked,
       [messages.resultJSScrollLock]: result.jsScrollUnlocked
     });
@@ -2118,7 +3914,7 @@
       state.siteMode === MODES.auto &&
       !hostInfo.isSensitive &&
       detection.confidence >= AUTO_THRESHOLD &&
-      detection.popups.length > 0
+      (detection.popups.length > 0 || detection.inlineGates.length > 0)
     );
   }
 
@@ -2168,6 +3964,7 @@
       return null;
     }
 
+    captureDownloadSlotSnapshots();
     const detection = detect();
 
     if (!detection.found) {
@@ -2326,6 +4123,7 @@
       [messages.tablePopupCount]: detection.popups.length,
       [messages.tableBackdropCount]: detection.backdrops.length,
       [messages.tableBlurCount]: detection.blurElements.length,
+      [messages.tableInlineGateCount]: detection.inlineGates.length,
       [messages.tableScrollLock]: detection.scrollLock.locked,
       [messages.tableTextSignals]:
         detection.warningElements.filter(containsAntiAdblockText).length,
@@ -2425,6 +4223,7 @@
   function stop() {
     state.stopped = true;
     stopObserver();
+    stopDownloadSlotSnapshotObserver();
     closeCard();
 
     try {
@@ -2435,6 +4234,8 @@
       console.warn(`${APP_NAME}: instance cleanup failed`, error);
     }
   }
+
+  startDownloadSlotSnapshotObserver();
 
   await loadPreferences();
   registerMenuCommands();
