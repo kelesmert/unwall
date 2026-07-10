@@ -22,8 +22,9 @@ Use this method if you want Unwall to run automatically on pages you visit.
 3. Confirm installation in your userscript manager.
 
 After installation, browse normally. When Unwall detects an anti-adblock access
-wall, it shows a small confirmation card. Choose `Remove` to hide the wall, or
-`Ignore` to leave the page unchanged.
+wall, it shows a small confirmation card. Choose `Remove` to hide the wall,
+`Remember removal` to allow high-confidence removals on that site in the
+future, or `Ignore` to leave the page unchanged.
 
 Unwall runs only in top-level pages. Automatic detection and automatic removal
 are disabled on sensitive sites such as banking, payment, and email/login
@@ -79,15 +80,14 @@ From the userscript manager menu, you can:
 
 - Scan the current page.
 - Turn global detection on or off.
-- Remember detection for the current site.
-- Enable or disable automatic removal for the current site.
+- Remember or disable remembered removal for the current site.
 - Forget the current site setting.
 - Show diagnostics.
 
-If automatic removal is enabled for a site, Unwall may remove high-confidence
-access walls on that site without asking again. Automatic detection and
-automatic removal are disabled on sensitive sites and subdomains such as login,
-account, billing, checkout, payment, banking, email, and wallet areas.
+If removal is remembered for a site, Unwall may remove high-confidence access
+walls on that site without asking again. Automatic detection and remembered
+removal are disabled on sensitive sites and subdomains such as login, account,
+billing, checkout, payment, banking, email, and wallet areas.
 
 ## Safety and Limits
 

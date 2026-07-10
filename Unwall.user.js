@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.9
+// @version      0.1.10
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
@@ -11,7 +11,7 @@
 // @downloadURL  https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js
 // @match        http://*/*
 // @match        https://*/*
-// @run-at       document-idle
+// @run-at       document-start
 // @noframes
 // @grant        GM_registerMenuCommand
 // @grant        GM_getValue
@@ -21,13 +21,14 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.deleteValue
+// @grant        unsafeWindow
 // ==/UserScript==
 
 (async () => {
   "use strict";
 
   const APP_NAME = "Unwall";
-  const SCRIPT_VERSION = "0.1.9";
+  const SCRIPT_VERSION = "0.1.10";
   const INSTANCE_KEY = "__unwall";
   let previousInstance = null;
 
@@ -44,7 +45,6 @@
 
   const MODES = {
     default: "default",
-    remember: "remember",
     auto: "auto"
   };
 
@@ -55,15 +55,28 @@
   const OBSERVER_SCAN_DEBOUNCE_MS = 300;
   const OBSERVER_SCAN_COOLDOWN_MS = 1200;
   const OBSERVER_MUTATION_BATCH_LIMIT = 80;
-  const EVENT_HANDLER_RESTORE_MS = 250;
+  const DELAYED_SCAN_OFFSETS_MS = [1000, 3000, 7000, 12000];
   const IGNORED_SIGNATURE_LIMIT = 100;
   const DOWNLOAD_SLOT_SNAPSHOT_MS = 12000;
   const DOWNLOAD_SLOT_SNAPSHOT_LIMIT = 8;
   const REHYDRATION_LINK_LIMIT = 8;
   const CARD_FADE_MS = 1000;
   const UNDO_CARD_MS = 5000;
+  const POST_CLEAN_UNLOCK_WATCH_MS = 2200;
+  const TRACKED_SCROLL_LISTENER_LIMIT = 800;
+  const TRACKED_SCROLL_LISTENER_WINDOW_MS = 18000;
   const UNWALL_ROOT_SELECTOR = "[data-unwall-root]";
   const UNWALL_Z_INDEX = "2147483647";
+  const SCROLL_LOCK_EVENT_TYPES = new Set([
+    "scroll",
+    "wheel",
+    "touchmove",
+    "keydown"
+  ]);
+  const pageWindow =
+    typeof unsafeWindow !== "undefined"
+      ? unsafeWindow
+      : window;
 
   const wait = ms =>
     new Promise(resolve => setTimeout(resolve, ms));
@@ -92,12 +105,11 @@
       wallDescription: "Do you want to remove this page access block?",
       remove: "Remove",
       ignore: "Ignore",
-      remember: "Remember detection on this site",
-      auto: "Automatically remove on this site",
-      autoConfirmTitle: "Enable automatic removal?",
+      remember: "Remember removal",
+      autoConfirmTitle: "Remember removal on this site?",
       autoConfirmText:
-        "Unwall will remove high-confidence access walls on this domain without asking again.",
-      autoConfirmEnable: "Enable auto remove",
+        "Unwall will remove high-confidence access walls on {site} without asking again.",
+      autoConfirmEnable: "Remember removal",
       cancel: "Cancel",
       removed: "Unwall removed the access wall.",
       undo: "Undo",
@@ -108,14 +120,12 @@
       scanNow: "Scan this page now",
       globalOn: "Turn global detection on",
       globalOff: "Turn global detection off",
-      rememberSite: "Remember detection for this site",
-      autoEnableSite: "Enable auto remove for this site",
-      autoDisableSite: "Disable auto remove for this site",
+      autoEnableSite: "Remember removal for this site",
+      autoDisableSite: "Disable remembered removal for this site",
       forgetSite: "Forget this site setting",
       diagnostics: "Show diagnostics",
-      remembered: "Unwall will watch this site for longer.",
-      autoEnabled: "Automatic removal is enabled for this site.",
-      autoDisabled: "Automatic removal is disabled for this site.",
+      autoEnabled: "Removal will be remembered for this site.",
+      autoDisabled: "Remembered removal is disabled for this site.",
       siteForgotten: "This site setting was forgotten.",
       sensitiveAutoBlocked:
         "Automatic removal is disabled on sensitive sites.",
@@ -129,6 +139,10 @@
       tableScrollLock: "Scroll lock",
       tableTextSignals: "Text signals",
       tableDomSignals: "DOM signals",
+      tableSiteKey: "Site key",
+      tableSiteMode: "Site mode",
+      tableAutoEligible: "Auto eligible",
+      tableAutoThreshold: "Auto threshold",
       tableReasons: "Reasons",
       resultPopupHidden: "Hidden popups",
       resultBackdropHidden: "Hidden backdrops",
@@ -147,12 +161,11 @@
       wallDescription: "Sayfadaki erişim engelini kaldırmak ister misiniz?",
       remove: "Kaldır",
       ignore: "Yok say",
-      remember: "Bu sitede algılamayı hatırla",
-      auto: "Bu sitede bundan sonra otomatik kaldır",
-      autoConfirmTitle: "Otomatik kaldırma açılsın mı?",
+      remember: "Kaldırmayı hatırla",
+      autoConfirmTitle: "Kaldırmayı hatırla?",
       autoConfirmText:
-        "Unwall bu alan adında yüksek güvenli erişim duvarlarını tekrar sormadan kaldıracaktır.",
-      autoConfirmEnable: "Otomatik kaldırmayı aç",
+        "Unwall {site} üzerinde yüksek güvenli erişim duvarlarını tekrar sormadan kaldıracak.",
+      autoConfirmEnable: "Kaldırmayı hatırla",
       cancel: "İptal",
       removed: "Unwall erişim duvarını kaldırdı.",
       undo: "Geri al",
@@ -163,14 +176,12 @@
       scanNow: "Bu sayfayı şimdi tara",
       globalOn: "Global algılamayı aç",
       globalOff: "Global algılamayı kapat",
-      rememberSite: "Bu sitede algılamayı hatırla",
-      autoEnableSite: "Bu site için otomatik kaldırmayı aç",
-      autoDisableSite: "Bu site için otomatik kaldırmayı kapat",
+      autoEnableSite: "Bu site için kaldırmayı hatırla",
+      autoDisableSite: "Bu site için kaldırmayı hatırlamayı kapat",
       forgetSite: "Bu sitenin ayarını unut",
       diagnostics: "Teşhis bilgilerini göster",
-      remembered: "Unwall bu siteyi daha uzun süre izleyecek.",
-      autoEnabled: "Bu site için otomatik kaldırma açık.",
-      autoDisabled: "Bu site için otomatik kaldırma kapalı.",
+      autoEnabled: "Unwall bu site için kaldırmayı hatırlayacak.",
+      autoDisabled: "Bu site için kaldırmayı hatırlama kapalı.",
       siteForgotten: "Bu sitenin ayarı unutuldu.",
       sensitiveAutoBlocked:
         "Hassas sitelerde otomatik kaldırma devre dışıdır.",
@@ -184,6 +195,10 @@
       tableScrollLock: "Scroll kilidi",
       tableTextSignals: "Metin sinyali",
       tableDomSignals: "DOM sinyali",
+      tableSiteKey: "Site anahtarı",
+      tableSiteMode: "Site modu",
+      tableAutoEligible: "Otomatik uygun",
+      tableAutoThreshold: "Otomatik eşik",
       tableReasons: "Nedenler",
       resultPopupHidden: "Gizlenen popup",
       resultBackdropHidden: "Gizlenen backdrop",
@@ -202,12 +217,11 @@
       wallDescription: "Удалить блокировку доступа на этой странице?",
       remove: "Удалить",
       ignore: "Игнорировать",
-      remember: "Запомнить обнаружение для этого сайта",
-      auto: "Автоматически удалять на этом сайте",
-      autoConfirmTitle: "Включить автоматическое удаление?",
+      remember: "Запомнить удаление",
+      autoConfirmTitle: "Запомнить удаление для сайта?",
       autoConfirmText:
-        "Unwall будет удалять надежно обнаруженные стены доступа на этом домене без повторного запроса.",
-      autoConfirmEnable: "Включить",
+        "Unwall будет удалять надежно обнаруженные стены доступа на {site} без повторного запроса.",
+      autoConfirmEnable: "Запомнить удаление",
       cancel: "Отмена",
       removed: "Unwall удалил стену доступа.",
       undo: "Отменить",
@@ -218,14 +232,12 @@
       scanNow: "Проверить страницу сейчас",
       globalOn: "Включить глобальное обнаружение",
       globalOff: "Отключить глобальное обнаружение",
-      rememberSite: "Запомнить обнаружение для этого сайта",
-      autoEnableSite: "Включить автоудаление для сайта",
-      autoDisableSite: "Отключить автоудаление для сайта",
+      autoEnableSite: "Запомнить удаление для сайта",
+      autoDisableSite: "Отключить запомненное удаление для сайта",
       forgetSite: "Забыть настройку сайта",
       diagnostics: "Показать диагностику",
-      remembered: "Unwall будет дольше наблюдать за этим сайтом.",
-      autoEnabled: "Автоматическое удаление включено для этого сайта.",
-      autoDisabled: "Автоматическое удаление отключено для этого сайта.",
+      autoEnabled: "Удаление запомнено для этого сайта.",
+      autoDisabled: "Запомненное удаление отключено для этого сайта.",
       siteForgotten: "Настройка этого сайта удалена.",
       sensitiveAutoBlocked:
         "Автоматическое удаление отключено на чувствительных сайтах.",
@@ -239,6 +251,10 @@
       tableScrollLock: "Блокировка прокрутки",
       tableTextSignals: "Текстовые сигналы",
       tableDomSignals: "DOM-сигналы",
+      tableSiteKey: "Ключ сайта",
+      tableSiteMode: "Режим сайта",
+      tableAutoEligible: "Авто подходит",
+      tableAutoThreshold: "Порог авто",
       tableReasons: "Причины",
       resultPopupHidden: "Скрыто окон",
       resultBackdropHidden: "Скрыто фонов",
@@ -259,40 +275,43 @@
 
   const antiAdblockPatternSets = {
     en: [
-      /ad[-\s]*block(?:er|ing)?.{0,40}(?:detected|enabled|active)/i,
-      /ad\s*block(?:er)?.{0,40}(?:detected|enabled|active)/i,
-      /(?:detected|enabled|active).{0,40}ad[-\s]*block(?:er|ing)?/i,
-      /(?:detected|enabled|active).{0,40}ad\s*block(?:er)?/i,
-      /disable.{0,50}(?:your )?(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner)/i,
-      /disable.{0,40}(?:your )?ad\s*block(?:er|ing)?/i,
-      /turn off.{0,50}(?:your )?(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner)/i,
-      /turn off.{0,40}ad\s*block(?:er|ing)?/i,
-      /please.{0,40}(?:disable|turn off).{0,50}(?:ad[-\s]*block|anti[-\s]*banner)/i,
-      /please.{0,40}(?:disable|turn off).{0,40}ad\s*block/i,
-      /(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner).{0,80}(?:site|download|refresh|access)/i,
+      /(?:ad[-\s]*block(?:er|ing)?|ad\s*block(?:er|ing)?|anti[-\s]*banner).{0,50}(?:detected|enabled|active|found|running|in use)/i,
+      /(?:detected|enabled|active|found|running|in use).{0,50}(?:ad[-\s]*block(?:er|ing)?|ad\s*block(?:er|ing)?|anti[-\s]*banner)/i,
+      /(?:you(?:'re| are)?|you seem to be|it looks like you(?:'re| are)?).{0,60}(?:using|running).{0,40}(?:an? )?(?:ad[-\s]*block(?:er|ing)?|ad\s*block(?:er|ing)?|anti[-\s]*banner)/i,
+      /(?:disable|turn off|pause|remove).{0,50}(?:your )?(?:ad[-\s]*block(?:er|ing)?|ad\s*block(?:er|ing)?|anti[-\s]*banner)/i,
+      /please.{0,40}(?:disable|turn off|pause|remove).{0,50}(?:ad[-\s]*block|ad\s*block|anti[-\s]*banner)/i,
+      /(?:ad[-\s]*block(?:er|ing)?|ad\s*block(?:er|ing)?|anti[-\s]*banner).{0,80}(?:site|download|refresh|access|continue|support)/i,
       /whitelist.{0,40}(?:this )?(?:site|website)/i,
-      /allow.{0,40}ads.{0,40}(?:continue|access|support)/i
+      /(?:allow|enable).{0,50}(?:ads?|advertis(?:ing|ements)?).{0,50}(?:site|website|continue|access|support|free)/i
     ],
     tr: [
-      /reklam engelleyici(?:niz|yi)?.{0,40}(?:alg[ıi]land[ıi]|aç[ıi]k|etkin|kapat|devre d[ıi][şs][ıi])/i,
-      /(?:kapat|devre d[ıi][şs][ıi]).{0,40}reklam engelleyici/i,
-      /reklam engellemeyi.{0,40}devre d[ıi][şs][ıi]/i,
+      /reklam engelleyici(?:niz|yi)?.{0,60}(?:alg[ıi]land[ıi]|tespit edildi|bulundu|aç[ıi]k|etkin|kullan(?:d[ıi]ğ[ıi]n[ıi]z|[ıi]yorsunuz)?|anla[şs][ıi]l[ıi]yor)/i,
+      /(?:alg[ıi]land[ıi]|tespit edildi|bulundu|anla[şs][ıi]l[ıi]yor).{0,60}reklam engelleyici/i,
+      /(?:kapat|devre d[ıi][şs][ıi]|duraklat).{0,50}(?:reklam engelleyici|reklam engellemeyi)/i,
+      /reklam engellemeyi.{0,40}(?:devre d[ıi][şs][ıi]|kapat|duraklat)/i,
       /devam etmek için.{0,40}reklam engelleyici/i,
-      /siteyi.{0,40}(?:beyaz listeye|izin verilenlere).{0,40}ekleyin/i
+      /siteyi.{0,40}(?:beyaz listeye|izin verilenlere).{0,40}ekleyin/i,
+      /(?:lütfen|devam etmek için|eri[şs]im için|sitemiz(?:de|e|i)?).{0,50}(?:reklamlara|reklama).{0,40}izin ver(?:in|iniz)?/i,
+      /(?:reklamlara|reklama).{0,40}izin ver(?:in|iniz)?.{0,50}(?:devam|eri[şs]im|site|sitemiz|destek)/i
     ],
     ru: [
-      /блокировщик рекламы.{0,40}(?:обнаружен|включен|активен)/i,
-      /(?:обнаружен|включен|активен).{0,40}блокировщик рекламы/i,
-      /(?:отключите|выключите|деактивируйте).{0,40}блокировщик рекламы/i,
-      /(?:отключите|выключите|деактивируйте).{0,40}блокировку рекламы/i,
+      /блокировщик рекламы.{0,60}(?:обнаружен|включен|активен|найден|работает|используется)/i,
+      /(?:обнаружен|включен|активен|найден|работает|используется).{0,60}блокировщик рекламы/i,
+      /(?:похоже|кажется)?.{0,40}(?:вы )?(?:используете|запустили|включили).{0,50}(?:блокировщик рекламы|блокировку рекламы)/i,
+      /(?:отключите|выключите|деактивируйте|приостановите|уберите).{0,50}блокировщик рекламы/i,
+      /(?:отключите|выключите|деактивируйте|приостановите|уберите).{0,50}блокировку рекламы/i,
       /добавьте.{0,40}(?:сайт|нас).{0,40}(?:в белый список|в список исключений)/i,
-      /разрешите.{0,40}рекламу.{0,40}(?:продолжить|доступ)/i
+      /(?:разрешите|включите).{0,50}реклам[уы].{0,50}(?:сайт|продолж|доступ|поддерж)/i,
+      /реклам[уы].{0,50}(?:разрешите|включите).{0,50}(?:сайт|продолж|доступ|поддерж)/i
     ]
   };
 
+  const fallbackPatternLanguages = ["en", "tr", "ru"];
   const antiAdblockPatterns = [
-    ...(antiAdblockPatternSets[language] || antiAdblockPatternSets.en),
-    ...(language === "en" ? [] : antiAdblockPatternSets.en)
+    ...(antiAdblockPatternSets[language] || []),
+    ...fallbackPatternLanguages
+      .filter(patternLanguage => patternLanguage !== language)
+      .flatMap(patternLanguage => antiAdblockPatternSets[patternLanguage] || [])
   ];
 
   const antiAdblockAttributePatterns = [
@@ -310,6 +329,9 @@
 
   const inlineGateContextPattern =
     /(?:download|downloaded|refresh|reload|site|access|continue|allow|whitelist|support|indir|yenile|eri[şs]im|devam|скач|загруз|обнов|доступ)/i;
+
+  const inlineGateActionPattern =
+    /(?:(?:please|you need to|you must|must|have to|required).{0,80})?(?:disable|turn off|whitelist|allow|pause|remove).{0,80}(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing))|(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing)).{0,80}(?:disable|turn off|whitelist|allow|refresh|reload|downloaded|download|continue|support)|(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam).{0,80}(?:reklam|engelleyici)|(?:reklam|engelleyici).{0,80}(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam)|(?:отключите|выключите|деактивируйте|разрешите|добавьте|обновите).{0,80}(?:реклам|блокиров)|(?:реклам|блокиров).{0,80}(?:отключ|выключ|разреш|добав|обнов)/i;
 
   const downloadControlTokenPattern =
     /(?:download|downloaded|downlink|file|firmware|rom|mirror|indir|yükle|yukle|скач|загруз)/i;
@@ -405,6 +427,7 @@
   const state = {
     observer: null,
     observerTimer: null,
+    delayedScanTimers: [],
     scheduledScan: false,
     lastObserverScanAt: 0,
     suppressObserver: false,
@@ -425,6 +448,7 @@
     stopped: false
   };
 
+  const scrollListenerTracker = setupScrollListenerTracker();
   const memoryStorage = new Map();
   const hostInfo = getHostInfo();
 
@@ -516,6 +540,229 @@
     return value && typeof value.then === "function"
       ? value
       : Promise.resolve(value);
+  }
+
+  function normalizeListenerOptions(options) {
+    if (options === true || options === false) {
+      return {
+        capture: Boolean(options),
+        passive: null,
+        once: false,
+        signal: null
+      };
+    }
+
+    if (options && typeof options === "object") {
+      return {
+        capture: Boolean(options.capture),
+        passive:
+          typeof options.passive === "boolean"
+            ? options.passive
+            : null,
+        once: Boolean(options.once),
+        signal: options.signal || null
+      };
+    }
+
+    return {
+      capture: false,
+      passive: null,
+      once: false,
+      signal: null
+    };
+  }
+
+  function listenerTargetLabel(target) {
+    if (target === window || target === pageWindow) {
+      return "window";
+    }
+
+    if (target === document) {
+      return "document";
+    }
+
+    if (target === document.documentElement) {
+      return "html";
+    }
+
+    if (target === document.body) {
+      return "body";
+    }
+
+    if (target instanceof Element) {
+      const tag = target.tagName.toLowerCase();
+      const id = target.id ? `#${target.id}` : "";
+      const classes = [...target.classList]
+        .slice(0, 3)
+        .map(className => `.${className}`)
+        .join("");
+
+      return `${tag}${id}${classes}`;
+    }
+
+    return Object.prototype.toString.call(target);
+  }
+
+  function setupScrollListenerTracker() {
+    const trackerKey = "__unwallScrollListenerTracker";
+    const trackerWindow = pageWindow || window;
+    const EventTargetPrototype =
+      trackerWindow.EventTarget?.prototype ||
+      EventTarget.prototype;
+
+    try {
+      if (trackerWindow[trackerKey]?.records) {
+        return trackerWindow[trackerKey];
+      }
+    } catch {}
+
+    const records = [];
+    const nativeAddEventListener =
+      EventTargetPrototype.addEventListener;
+    const nativeRemoveEventListener =
+      EventTargetPrototype.removeEventListener;
+
+    function pruneRecords() {
+      while (records.length > TRACKED_SCROLL_LISTENER_LIMIT) {
+        records.shift();
+      }
+    }
+
+    function rememberRecord(target, type, listener, options) {
+      if (
+        !SCROLL_LOCK_EVENT_TYPES.has(type) ||
+        (
+          typeof listener !== "function" &&
+          !(listener && typeof listener.handleEvent === "function")
+        )
+      ) {
+        return;
+      }
+
+      const normalizedOptions = normalizeListenerOptions(options);
+
+      if (normalizedOptions.once) {
+        return;
+      }
+
+      const existing = records.find(record =>
+        record.target === target &&
+        record.type === type &&
+        record.listener === listener &&
+        record.capture === normalizedOptions.capture
+      );
+
+      if (existing) {
+        existing.options = options;
+        existing.passive = normalizedOptions.passive;
+        existing.signal = normalizedOptions.signal;
+        existing.createdAt = Date.now();
+        return;
+      }
+
+      records.push({
+        target,
+        targetLabel: listenerTargetLabel(target),
+        type,
+        listener,
+        options,
+        capture: normalizedOptions.capture,
+        passive: normalizedOptions.passive,
+        signal: normalizedOptions.signal,
+        createdAt: Date.now(),
+        stack: new Error().stack || "",
+        removed: false
+      });
+
+      pruneRecords();
+    }
+
+    function forgetRecord(target, type, listener, options) {
+      const normalizedOptions = normalizeListenerOptions(options);
+
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        const record = records[index];
+
+        if (
+          record.target === target &&
+          record.type === type &&
+          record.listener === listener &&
+          record.capture === normalizedOptions.capture
+        ) {
+          records.splice(index, 1);
+        }
+      }
+    }
+
+    EventTargetPrototype.addEventListener = function (type, listener, options) {
+      const result =
+        nativeAddEventListener.call(this, type, listener, options);
+
+      try {
+        rememberRecord(this, String(type), listener, options);
+      } catch (error) {
+        console.warn(`${APP_NAME}: scroll listener tracking failed`, error);
+      }
+
+      return result;
+    };
+
+    EventTargetPrototype.removeEventListener = function (type, listener, options) {
+      const result =
+        nativeRemoveEventListener.call(this, type, listener, options);
+
+      try {
+        forgetRecord(this, String(type), listener, options);
+      } catch (error) {
+        console.warn(`${APP_NAME}: scroll listener untracking failed`, error);
+      }
+
+      return result;
+    };
+
+    const tracker = {
+      records,
+      nativeAddEventListener,
+      nativeRemoveEventListener
+    };
+
+    try {
+      Object.defineProperty(trackerWindow, trackerKey, {
+        configurable: true,
+        enumerable: false,
+        value: tracker
+      });
+    } catch {}
+
+    return tracker;
+  }
+
+  function waitForDocumentReady() {
+    if (document.body && document.readyState !== "loading") {
+      return Promise.resolve();
+    }
+
+    return new Promise(resolve => {
+      let done = false;
+
+      const finish = () => {
+        if (done) {
+          return;
+        }
+
+        if (!document.body && document.readyState === "loading") {
+          return;
+        }
+
+        done = true;
+        document.removeEventListener("DOMContentLoaded", finish, true);
+        resolve();
+      };
+
+      document.addEventListener("DOMContentLoaded", finish, true);
+      window.setTimeout(finish, 3000);
+      finish();
+    });
   }
 
   function isUnwallInstance(value) {
@@ -921,6 +1168,16 @@
     );
   }
 
+  function hasInlineGateActionSignal(element) {
+    const text = normalizedText(element);
+    const signalText = getAttributeSignalText(element);
+
+    return (
+      inlineGateActionPattern.test(text) ||
+      inlineGateActionPattern.test(signalText)
+    );
+  }
+
   function isInlineGateBoundary(element) {
     if (!(element instanceof Element)) {
       return true;
@@ -957,6 +1214,21 @@
         styleSignals.hasLeftBorder ||
         styleSignals.hasBorder
       );
+    const signalLineCount = inlineGateSignalLineCount(element);
+    const strongNoticeEvidence =
+      noticeStyled &&
+      (
+        signalLineCount >= 2 ||
+        hasResidualInlineNoticeSignal(element)
+      );
+
+    if (
+      !hasInlineGateActionSignal(element) &&
+      !strongNoticeEvidence
+    ) {
+      return false;
+    }
+
     const maxTextLength = noticeStyled ? 1200 : 900;
 
     if (text.length < 12 || text.length > maxTextLength) {
@@ -1469,12 +1741,29 @@
       getColorAlpha(style.backgroundColor) < 0.12 ||
       Number(style.opacity || 1) < 0.25;
 
+    const wrapsHiddenDetection = [
+      ...detection.popups,
+      ...detection.backdrops,
+      ...detection.inlineGates
+    ].some(related =>
+      related !== element &&
+      related.hasAttribute("data-unwall-hidden") &&
+      element.contains(related)
+    );
+
+    const elevatedDetectionWrapper =
+      wrapsHiddenDetection &&
+      numericZIndex(element) >= 5;
+
     const blockerish =
       hasBlur(style) ||
       transparentish ||
-      style.cursor === "not-allowed";
+      style.cursor === "not-allowed" ||
+      elevatedDetectionWrapper;
 
-    const lowContent = normalizedText(element).length < 300;
+    const lowContent =
+      visibleNormalizedText(element).length < 120 &&
+      !containsVisibleControl(element);
     const highLayer =
       numericZIndex(element) >= 5 ||
       style.position === "fixed" ||
@@ -2992,6 +3281,11 @@
       reasons.push("inline-download-context");
     }
 
+    if (inlineGates.some(hasInlineGateActionSignal)) {
+      confidence += 8;
+      reasons.push("inline-action-signal");
+    }
+
     if (
       popups.some(element => {
         const role = element.getAttribute("role");
@@ -3110,6 +3404,7 @@
       backdrops,
       blurElements,
       scrollLock,
+      createdAt: Date.now(),
       signature: makeSignature(warningElements, popups, inlineGates)
     };
 
@@ -3117,20 +3412,15 @@
     return detection;
   }
 
-  function restoreEventHandlers(record, onlyIfCleared = false) {
+  function restoreEventHandlers(record) {
     if (!record || record.type !== "event-handlers") {
       return;
     }
 
-    if (!onlyIfCleared || window.onscroll === null) {
-      window.onscroll = record.windowOnScroll;
-    }
+    window.onscroll = record.windowOnScroll;
+    document.onscroll = record.documentOnScroll;
 
-    if (!onlyIfCleared || document.onscroll === null) {
-      document.onscroll = record.documentOnScroll;
-    }
-
-    if (document.body && (!onlyIfCleared || document.body.onscroll === null)) {
+    if (document.body) {
       document.body.onscroll = record.bodyOnScroll;
     }
   }
@@ -3140,6 +3430,14 @@
 
     return {
       records,
+
+      discardRecord(record) {
+        const index = records.lastIndexOf(record);
+
+        if (index >= 0) {
+          records.splice(index, 1);
+        }
+      },
 
       setStyle(element, property, value, priority = "") {
         records.push({
@@ -3223,58 +3521,82 @@
         return record;
       },
 
+      addCustomUndo(label, undo) {
+        const record = {
+          type: "custom",
+          label,
+          undo
+        };
+
+        records.push(record);
+        return record;
+      },
+
       restore() {
         state.suppressObserver = true;
 
-        for (const record of [...records].reverse()) {
-          if (!record.element?.isConnected && record.type !== "event-handlers") {
-            continue;
-          }
-
-          if (record.type === "style") {
-            record.element.style.setProperty(
-              record.property,
-              record.value,
-              record.priority
-            );
-          }
-
-          if (record.type === "attribute") {
-            if (record.hadValue) {
-              record.element.setAttribute(record.name, record.value);
-            } else {
-              record.element.removeAttribute(record.name);
-            }
-          }
-
-          if (record.type === "class") {
-            if (record.value === null) {
-              record.element.removeAttribute("class");
-            } else {
-              record.element.setAttribute("class", record.value);
-            }
-          }
-
-          if (record.type === "style-attribute") {
-            if (record.value === null) {
-              record.element.removeAttribute("style");
-            } else {
-              record.element.setAttribute("style", record.value);
+        try {
+          for (const record of [...records].reverse()) {
+            if (
+              !record.element?.isConnected &&
+              !["event-handlers", "custom"].includes(record.type)
+            ) {
+              continue;
             }
 
-            record.element.removeAttribute("data-unwall-hidden");
-          }
+            if (record.type === "style") {
+              record.element.style.setProperty(
+                record.property,
+                record.value,
+                record.priority
+              );
+            }
 
-          if (record.type === "inserted-node") {
-            record.element.remove();
-          }
+            if (record.type === "attribute") {
+              if (record.hadValue) {
+                record.element.setAttribute(record.name, record.value);
+              } else {
+                record.element.removeAttribute(record.name);
+              }
+            }
 
-          if (record.type === "event-handlers") {
-            restoreEventHandlers(record);
+            if (record.type === "class") {
+              if (record.value === null) {
+                record.element.removeAttribute("class");
+              } else {
+                record.element.setAttribute("class", record.value);
+              }
+            }
+
+            if (record.type === "style-attribute") {
+              if (record.value === null) {
+                record.element.removeAttribute("style");
+              } else {
+                record.element.setAttribute("style", record.value);
+              }
+
+              record.element.removeAttribute("data-unwall-hidden");
+            }
+
+            if (record.type === "inserted-node") {
+              record.element.remove();
+            }
+
+            if (record.type === "event-handlers") {
+              restoreEventHandlers(record);
+            }
+
+            if (record.type === "custom") {
+              try {
+                record.undo?.();
+              } catch (error) {
+                console.warn(`${APP_NAME}: custom restore failed`, error);
+              }
+            }
           }
+        } finally {
+          state.suppressObserver = false;
         }
-
-        state.suppressObserver = false;
       }
     };
   }
@@ -3330,35 +3652,37 @@
     return true;
   }
 
-  async function releaseJavaScriptScrollLock(restore) {
-    const scroller =
-      document.scrollingElement ||
-      document.documentElement;
+  function unlockCurrentCSSScroll(restore) {
+    const currentScrollLock = detectCSSScrollLock();
 
-    const maximum =
-      scroller.scrollHeight - scroller.clientHeight;
-
-    if (maximum < 100) {
+    if (!currentScrollLock.locked) {
       return false;
     }
 
-    const startingPosition = scroller.scrollTop;
-    const target =
-      startingPosition + 120 <= maximum
-        ? startingPosition + 120
-        : Math.max(0, startingPosition - 120);
+    return unlockCSSScroll(
+      {
+        scrollLock: currentScrollLock
+      },
+      restore
+    );
+  }
 
-    window.scrollTo(0, target);
-    await wait(180);
+  function captureScrollHandlerProperties(restore) {
+    const handlers = [
+      window.onscroll,
+      document.onscroll,
+      document.body?.onscroll || null
+    ];
+    const count = handlers.filter(Boolean).length;
 
-    const pulledBack =
-      Math.abs(scroller.scrollTop - target) > 25;
-
-    if (!pulledBack) {
-      return false;
+    if (count === 0) {
+      return {
+        count: 0,
+        record: null
+      };
     }
 
-    const eventHandlers = restore.saveEventHandlers();
+    const record = restore.saveEventHandlers();
     window.onscroll = null;
     document.onscroll = null;
 
@@ -3366,13 +3690,413 @@
       document.body.onscroll = null;
     }
 
-    window.scrollTo(0, target);
-    window.setTimeout(
-      () => restoreEventHandlers(eventHandlers, true),
-      EVENT_HANDLER_RESTORE_MS
+    return {
+      count,
+      record
+    };
+  }
+
+  function relatedDetectionElements(detection) {
+    return [
+      ...(detection?.popups || []),
+      ...(detection?.backdrops || []),
+      ...(detection?.inlineGates || [])
+    ].filter(Boolean);
+  }
+
+  function isDetectionRelatedTarget(target, detection) {
+    if (!(target instanceof Element)) {
+      return false;
+    }
+
+    return relatedDetectionElements(detection).some(element =>
+      element === target ||
+      element.contains(target) ||
+      target.contains(element) ||
+      element.parentElement === target ||
+      target.parentElement === element.parentElement
+    );
+  }
+
+  function isGlobalScrollTarget(target) {
+    return (
+      target === window ||
+      target === pageWindow ||
+      target === document ||
+      target === document.documentElement ||
+      target === document.body
+    );
+  }
+
+  function listenerStackLooksLikeWall(record) {
+    return /(?:ad[-_\s]*block|anti[-_\s]*(?:ad|banner)|\badvert(?:is(?:e|ement|ing))?\b|\bads?\b|\bmodal\b|\bpopup\b|\boverlay\b|\bbackdrop\b|\bwall\b|\block\b)/i.test(
+      String(record.stack || "")
+    );
+  }
+
+  function listenerWasCreatedNearDetection(record, detection) {
+    return Boolean(
+      detection?.createdAt &&
+      Math.abs(detection.createdAt - record.createdAt) <=
+        TRACKED_SCROLL_LISTENER_WINDOW_MS
+    );
+  }
+
+  function listenerLooksLikeScrollLock(record, detection, aggressive = false) {
+    if (
+      !record ||
+      record.removed ||
+      record.signal?.aborted ||
+      !SCROLL_LOCK_EVENT_TYPES.has(record.type)
+    ) {
+      return false;
+    }
+
+    const globalTarget = isGlobalScrollTarget(record.target);
+    const relatedTarget =
+      isDetectionRelatedTarget(record.target, detection);
+
+    if (!globalTarget && !relatedTarget) {
+      return false;
+    }
+
+    const stackSuspicious = listenerStackLooksLikeWall(record);
+    const closeToDetection =
+      listenerWasCreatedNearDetection(record, detection);
+    const passiveFalse = record.passive === false;
+    const cancelableInput =
+      record.type === "wheel" ||
+      record.type === "touchmove";
+
+    if (relatedTarget) {
+      if (cancelableInput) {
+        return passiveFalse || stackSuspicious || closeToDetection;
+      }
+
+      return stackSuspicious || closeToDetection;
+    }
+
+    if (cancelableInput) {
+      return (
+        (
+          passiveFalse &&
+          (stackSuspicious || closeToDetection || aggressive)
+        ) ||
+        (stackSuspicious && closeToDetection)
+      );
+    }
+
+    if (record.type === "scroll") {
+      return (
+        stackSuspicious &&
+        (closeToDetection || aggressive)
+      );
+    }
+
+    if (record.type === "keydown") {
+      return (
+        stackSuspicious &&
+        closeToDetection
+      );
+    }
+
+    return false;
+  }
+
+  function getSuspiciousScrollLockListeners(detection, aggressive = false) {
+    return [...scrollListenerTracker.records]
+      .filter(record =>
+        listenerLooksLikeScrollLock(record, detection, aggressive)
+      );
+  }
+
+  function removeTrackedScrollLockListeners(records, restore) {
+    const removedTypes = new Set();
+    const undoRecords = [];
+    let count = 0;
+
+    for (const record of records) {
+      try {
+        record.target.removeEventListener(
+          record.type,
+          record.listener,
+          record.capture
+        );
+
+        record.removed = true;
+        count += 1;
+        removedTypes.add(record.type);
+
+        const undoRecord = restore.addCustomUndo(
+          "tracked-scroll-listener",
+          () => {
+            try {
+              record.target.addEventListener(
+                record.type,
+                record.listener,
+                record.options
+              );
+              record.removed = false;
+            } catch (error) {
+              console.warn(`${APP_NAME}: tracked listener restore failed`, error);
+            }
+          }
+        );
+
+        undoRecords.push(undoRecord);
+      } catch (error) {
+        console.warn(`${APP_NAME}: tracked listener removal failed`, error);
+      }
+    }
+
+    return {
+      count,
+      types: [...removedTypes],
+      undoRecords
+    };
+  }
+
+  function rollbackScrollUnlockChanges(restore, undoRecords, eventRecord) {
+    if (eventRecord) {
+      restoreEventHandlers(eventRecord);
+      restore.discardRecord(eventRecord);
+    }
+
+    for (const undoRecord of [...undoRecords].reverse()) {
+      try {
+        undoRecord.undo?.();
+      } catch (error) {
+        console.warn(`${APP_NAME}: tracked listener rollback failed`, error);
+      }
+
+      restore.discardRecord(undoRecord);
+    }
+  }
+
+  async function verifyScrollIsFree() {
+    const scroller =
+      document.scrollingElement ||
+      document.documentElement;
+
+    if (!scroller) {
+      return {
+        free: true,
+        reason: "no-scroller"
+      };
+    }
+
+    const maximum =
+      scroller.scrollHeight - scroller.clientHeight;
+
+    if (maximum < 80) {
+      return {
+        free: true,
+        reason: "not-scrollable-enough"
+      };
+    }
+
+    const startingPosition = scroller.scrollTop;
+    const delta =
+      startingPosition + 32 <= maximum
+        ? 32
+        : -32;
+    const target = Math.max(
+      0,
+      Math.min(maximum, startingPosition + delta)
     );
 
-    return true;
+    if (target === startingPosition) {
+      return {
+        free: true,
+        reason: "no-scroll-room"
+      };
+    }
+
+    try {
+      scroller.scrollTo({
+        top: target,
+        behavior: "instant"
+      });
+    } catch {
+      window.scrollTo(0, target);
+    }
+
+    await wait(90);
+
+    const reached =
+      Math.abs(scroller.scrollTop - target) <= 10;
+
+    try {
+      scroller.scrollTo({
+        top: startingPosition,
+        behavior: "instant"
+      });
+    } catch {
+      window.scrollTo(0, startingPosition);
+    }
+
+    await wait(0);
+
+    return {
+      free: reached,
+      reason: reached
+        ? "scroll-position-stable"
+        : "scroll-position-reverted"
+    };
+  }
+
+  async function unlockScrollAfterWallRemoval(detection, restore) {
+    const result = {
+      cssScrollUnlocked: false,
+      unlocked: false,
+      scrollFree: false,
+      reason: "not-run",
+      propertyHandlerCount: 0,
+      trackedListenerCount: 0,
+      trackedListenerTypes: [],
+      attempts: []
+    };
+    const undoRecords = [];
+    let eventRecord = null;
+    const passDelays = [0, 250, 650];
+
+    result.cssScrollUnlocked = unlockCurrentCSSScroll(restore);
+
+    for (let pass = 0; pass < passDelays.length; pass += 1) {
+      const delay = passDelays[pass];
+
+      if (delay > 0) {
+        await wait(delay);
+      }
+
+      result.cssScrollUnlocked =
+        unlockCurrentCSSScroll(restore) ||
+        result.cssScrollUnlocked;
+
+      const before = await verifyScrollIsFree();
+      result.attempts.push(`pass-${pass}:before:${before.reason}`);
+
+      if (before.free) {
+        result.scrollFree = true;
+        result.reason = pass === 0
+          ? "already-free"
+          : "free-after-delayed-pass";
+        return result;
+      }
+
+      if (result.propertyHandlerCount === 0) {
+        const propertyResult =
+          captureScrollHandlerProperties(restore);
+
+        if (propertyResult.count > 0) {
+          eventRecord = propertyResult.record;
+          result.propertyHandlerCount = propertyResult.count;
+          result.unlocked = true;
+
+          const afterProperties = await verifyScrollIsFree();
+          result.attempts.push(
+            `pass-${pass}:properties:${afterProperties.reason}`
+          );
+
+          if (afterProperties.free) {
+            result.scrollFree = true;
+            result.reason = "property-scroll-handlers-cleared";
+            return result;
+          }
+        }
+      }
+
+      const listeners =
+        getSuspiciousScrollLockListeners(detection, pass > 0);
+      const listenerResult =
+        removeTrackedScrollLockListeners(listeners, restore);
+
+      if (listenerResult.count > 0) {
+        undoRecords.push(...listenerResult.undoRecords);
+        result.trackedListenerCount += listenerResult.count;
+        result.trackedListenerTypes = uniqueElements([
+          ...result.trackedListenerTypes,
+          ...listenerResult.types
+        ]);
+        result.unlocked = true;
+
+        const afterListeners = await verifyScrollIsFree();
+        result.attempts.push(
+          `pass-${pass}:listeners:${afterListeners.reason}`
+        );
+
+        if (afterListeners.free) {
+          result.scrollFree = true;
+          result.reason = listenerResult.types.length > 0
+            ? `tracked-listeners-cleared:${listenerResult.types.join("+")}`
+            : "tracked-listeners-cleared";
+          return result;
+        }
+      }
+    }
+
+    const finalCheck = await verifyScrollIsFree();
+    result.scrollFree = finalCheck.free;
+    result.reason = finalCheck.free
+      ? "free-after-final-check"
+      : finalCheck.reason;
+
+    if (!result.scrollFree) {
+      rollbackScrollUnlockChanges(restore, undoRecords, eventRecord);
+      result.unlocked = false;
+      result.propertyHandlerCount = 0;
+      result.trackedListenerCount = 0;
+      result.trackedListenerTypes = [];
+      result.reason = `${result.reason}-rolled-back`;
+    }
+
+    return result;
+  }
+
+  function startPostCleanUnlockWatch(
+    detection,
+    restore,
+    durationMs = POST_CLEAN_UNLOCK_WATCH_MS
+  ) {
+    if (!document.documentElement || state.stopped) {
+      return null;
+    }
+
+    const observer = new MutationObserver(() => {
+      if (state.suppressObserver) {
+        return;
+      }
+
+      state.suppressObserver = true;
+
+      try {
+        unlockCurrentCSSScroll(restore);
+        unlockResidualInteraction(detection, restore);
+      } finally {
+        state.suppressObserver = false;
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      attributeFilter: [
+        "class",
+        "style",
+        "hidden",
+        "aria-hidden",
+        "aria-modal"
+      ]
+    });
+
+    restore.addCustomUndo(
+      "post-clean-unlock-watch",
+      () => observer.disconnect()
+    );
+    window.setTimeout(() => observer.disconnect(), durationMs);
+
+    return observer;
   }
 
   function unlockRootInteraction(restore) {
@@ -3476,12 +4200,24 @@
         }
       }
 
-      const cssScrollUnlocked = unlockCSSScroll(detection, restore);
-      const jsScrollUnlocked =
-        detection.confidence >= AUTO_THRESHOLD
-          ? await releaseJavaScriptScrollLock(restore)
-          : false;
+      let cssScrollUnlocked = unlockCSSScroll(detection, restore);
+      cssScrollUnlocked =
+        unlockCurrentCSSScroll(restore) ||
+        cssScrollUnlocked;
       unlockResidualInteraction(detection, restore);
+      const scrollUnlockResult =
+        await unlockScrollAfterWallRemoval(detection, restore);
+
+      cssScrollUnlocked =
+        scrollUnlockResult.cssScrollUnlocked ||
+        cssScrollUnlocked;
+
+      await wait(250);
+      cssScrollUnlocked =
+        unlockCurrentCSSScroll(restore) ||
+        cssScrollUnlocked;
+      unlockResidualInteraction(detection, restore);
+      startPostCleanUnlockWatch(detection, restore);
 
       return {
         restore,
@@ -3494,7 +4230,14 @@
         rehydratedControlCount: rehydrationResult.count,
         rehydrationReason: rehydrationResult.reason,
         cssScrollUnlocked,
-        jsScrollUnlocked
+        jsScrollUnlocked: scrollUnlockResult.unlocked,
+        jsScrollFree: scrollUnlockResult.scrollFree,
+        jsScrollReason: scrollUnlockResult.reason,
+        jsScrollListenerCount: scrollUnlockResult.trackedListenerCount,
+        jsScrollListenerTypes:
+          scrollUnlockResult.trackedListenerTypes.join(", "),
+        jsScrollPropertyHandlerCount:
+          scrollUnlockResult.propertyHandlerCount
       };
     } finally {
       state.suppressObserver = false;
@@ -3608,17 +4351,6 @@
         gap: 8px;
         margin: 10px 0 12px;
       }
-      label {
-        display: flex;
-        gap: 8px;
-        align-items: flex-start;
-        color: #e5e7eb;
-      }
-      input {
-        flex: 0 0 auto;
-        margin-top: 2px;
-        accent-color: #10b981;
-      }
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -3648,12 +4380,11 @@
         background: #34d399;
       }
       button:disabled,
-      input:disabled + span {
+      button[aria-disabled="true"] {
         cursor: not-allowed;
         opacity: 0.55;
       }
-      button:focus-visible,
-      input:focus-visible {
+      button:focus-visible {
         outline: 2px solid #34d399;
         outline-offset: 2px;
       }
@@ -3709,20 +4440,6 @@
     button.className = className;
     button.textContent = label;
     return button;
-  }
-
-  function createCheckbox(label, checked = false, disabled = false) {
-    const wrapper = document.createElement("label");
-    const input = document.createElement("input");
-    const text = document.createElement("span");
-
-    input.type = "checkbox";
-    input.checked = checked;
-    input.disabled = disabled;
-    text.textContent = label;
-
-    wrapper.append(input, text);
-    return { wrapper, input };
   }
 
   function closeCardWithFade(host, fadeMs = CARD_FADE_MS) {
@@ -3790,21 +4507,20 @@
       [messages.resultControlsRehydrated]: result.rehydratedControlCount,
       [messages.resultRehydrationReason]: result.rehydrationReason,
       [messages.resultCSSScrollLock]: result.cssScrollUnlocked,
-      [messages.resultJSScrollLock]: result.jsScrollUnlocked
+      [messages.resultJSScrollLock]: result.jsScrollUnlocked,
+      "JS scroll free": result.jsScrollFree,
+      "JS scroll reason": result.jsScrollReason,
+      "JS listener removed": result.jsScrollListenerCount,
+      "JS listener types": result.jsScrollListenerTypes,
+      "JS property handlers": result.jsScrollPropertyHandlerCount
     });
   }
 
   async function applyPreferencesBeforeClean({
-    rememberChecked,
-    autoChecked
-  }) {
-    if (autoChecked) {
+    rememberRemoval = false
+  } = {}) {
+    if (rememberRemoval) {
       await saveSiteMode(MODES.auto);
-      return;
-    }
-
-    if (rememberChecked && state.siteMode !== MODES.auto) {
-      await saveSiteMode(MODES.remember);
     }
   }
 
@@ -3816,10 +4532,14 @@
     showUndo(result);
   }
 
-  function showAutoConfirm(detection, rememberChecked) {
+  function formattedAutoConfirmText() {
+    return messages.autoConfirmText.replace("{site}", hostInfo.siteKey);
+  }
+
+  function showAutoConfirm(detection) {
     const card = createCardBase("dialog");
     appendTextElement(card, "h2", "title", messages.autoConfirmTitle);
-    appendTextElement(card, "p", "text", messages.autoConfirmText);
+    appendTextElement(card, "p", "text", formattedAutoConfirmText());
 
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -3828,16 +4548,12 @@
     const enableButton = createButton(messages.autoConfirmEnable, "primary");
 
     cancelButton.addEventListener("click", () => {
-      showPrompt(detection, {
-        rememberChecked,
-        autoChecked: false
-      });
+      showPrompt(detection);
     });
 
     enableButton.addEventListener("click", async () => {
       await runCleanFromPrompt(detection, {
-        rememberChecked,
-        autoChecked: true
+        rememberRemoval: true
       });
     });
 
@@ -3845,32 +4561,13 @@
     card.appendChild(actions);
   }
 
-  function showPrompt(
-    detection,
-    initialOptions = {
-      rememberChecked: state.siteMode === MODES.remember,
-      autoChecked: state.siteMode === MODES.auto
-    }
-  ) {
+  function showPrompt(detection) {
     const card = createCardBase("dialog");
     appendTextElement(card, "h2", "title", messages.wallTitle);
     appendTextElement(card, "p", "text", messages.wallDescription);
 
     const options = document.createElement("div");
     options.className = "options";
-
-    const remember = createCheckbox(
-      messages.remember,
-      initialOptions.rememberChecked
-    );
-
-    const auto = createCheckbox(
-      messages.auto,
-      initialOptions.autoChecked,
-      hostInfo.isSensitive
-    );
-
-    options.append(remember.wrapper, auto.wrapper);
 
     if (hostInfo.isSensitive) {
       appendTextElement(options, "p", "mini", messages.sensitiveAutoBlocked);
@@ -3880,7 +4577,8 @@
     actions.className = "actions";
 
     const ignoreButton = createButton(messages.ignore);
-    const removeButton = createButton(messages.remove, "primary");
+    const removeButton = createButton(messages.remove);
+    const rememberRemovalButton = createButton(messages.remember, "primary");
 
     ignoreButton.addEventListener("click", () => {
       rememberIgnoredSignature(detection.signature);
@@ -3888,25 +4586,24 @@
     });
 
     removeButton.addEventListener("click", async () => {
-      if (
-        auto.input.checked &&
-        state.siteMode !== MODES.auto &&
-        !hostInfo.isSensitive
-      ) {
-        showAutoConfirm(detection, remember.input.checked);
-        return;
-      }
+      await runCleanFromPrompt(detection);
+    });
 
-      await runCleanFromPrompt(detection, {
-        rememberChecked: remember.input.checked,
-        autoChecked:
-          auto.input.checked &&
-          !hostInfo.isSensitive
-      });
+    rememberRemovalButton.addEventListener("click", () => {
+      showAutoConfirm(detection);
     });
 
     actions.append(ignoreButton, removeButton);
-    card.append(options, actions);
+
+    if (!hostInfo.isSensitive && state.siteMode !== MODES.auto) {
+      actions.appendChild(rememberRemovalButton);
+    }
+
+    if (options.childNodes.length > 0) {
+      card.appendChild(options);
+    }
+
+    card.appendChild(actions);
   }
 
   function canAutoRemove(detection) {
@@ -3925,7 +4622,6 @@
   function shouldRunAutomatically() {
     return (
       state.globalDetection ||
-      state.siteMode === MODES.remember ||
       state.siteMode === MODES.auto
     );
   }
@@ -3939,11 +4635,13 @@
   async function runAutomaticDetection() {
     if (!shouldRunAutomatically()) {
       stopObserver();
+      stopDelayedScans();
       return;
     }
 
     if (!isAutomaticDetectionAllowed()) {
       stopObserver();
+      stopDelayedScans();
       console.log(messages.sensitiveDetectionBlocked);
       return;
     }
@@ -3952,6 +4650,7 @@
 
     if (!state.lastDetection?.found) {
       startObserver(automaticObserverDuration());
+      startDelayedScans();
     }
   }
 
@@ -3981,6 +4680,7 @@
     }
 
     stopObserver();
+    stopDelayedScans();
 
     if (canAutoRemove(detection)) {
       const result = await cleanDetection(detection);
@@ -4067,6 +4767,51 @@
     }, delay);
   }
 
+  function stopDelayedScans() {
+    for (const timer of state.delayedScanTimers) {
+      window.clearTimeout(timer);
+    }
+
+    state.delayedScanTimers = [];
+  }
+
+  function startDelayedScans() {
+    stopDelayedScans();
+
+    if (
+      state.stopped ||
+      !shouldRunAutomatically() ||
+      !isAutomaticDetectionAllowed()
+    ) {
+      return;
+    }
+
+    state.delayedScanTimers = DELAYED_SCAN_OFFSETS_MS.map(delay => {
+      const timer = window.setTimeout(async () => {
+        state.delayedScanTimers =
+          state.delayedScanTimers.filter(activeTimer => activeTimer !== timer);
+
+        if (
+          state.stopped ||
+          state.suppressObserver ||
+          state.lastDetection?.found ||
+          !shouldRunAutomatically() ||
+          !isAutomaticDetectionAllowed()
+        ) {
+          return;
+        }
+
+        const detection = await scan({ manual: false });
+
+        if (detection?.found) {
+          stopDelayedScans();
+        }
+      }, delay);
+
+      return timer;
+    });
+  }
+
   function startObserver(durationMs) {
     stopObserver();
 
@@ -4119,7 +4864,11 @@
     const detection = state.lastDetection || detect();
 
     console.table({
+      [messages.tableSiteKey]: hostInfo.siteKey,
+      [messages.tableSiteMode]: state.siteMode,
       [messages.tableConfidence]: detection.confidence,
+      [messages.tableAutoEligible]: canAutoRemove(detection),
+      [messages.tableAutoThreshold]: AUTO_THRESHOLD,
       [messages.tablePopupCount]: detection.popups.length,
       [messages.tableBackdropCount]: detection.backdrops.length,
       [messages.tableBlurCount]: detection.blurElements.length,
@@ -4156,6 +4905,7 @@
           await runAutomaticDetection();
         } else {
           stopObserver();
+          stopDelayedScans();
         }
 
         showToast(
@@ -4166,19 +4916,6 @@
             : messages.globalOff,
           5000
         );
-      }
-    );
-
-    manager.registerMenuCommand(
-      menuLabel(messages.rememberSite),
-      async () => {
-        if (hostInfo.isSensitive) {
-          showToast(messages.sensitiveDetectionBlocked, 6000);
-          return;
-        }
-
-        await saveSiteMode(MODES.remember);
-        showToast(messages.remembered, 5000);
       }
     );
 
@@ -4199,7 +4936,7 @@
       menuLabel(messages.autoDisableSite),
       async () => {
         if (state.siteMode === MODES.auto) {
-          await saveSiteMode(MODES.remember);
+          await saveSiteMode(MODES.default);
         }
 
         showToast(messages.autoDisabled, 5000);
@@ -4223,6 +4960,7 @@
   function stop() {
     state.stopped = true;
     stopObserver();
+    stopDelayedScans();
     stopDownloadSlotSnapshotObserver();
     closeCard();
 
@@ -4234,8 +4972,6 @@
       console.warn(`${APP_NAME}: instance cleanup failed`, error);
     }
   }
-
-  startDownloadSlotSnapshotObserver();
 
   await loadPreferences();
   registerMenuCommands();
@@ -4260,6 +4996,12 @@
     });
   } catch (error) {
     console.warn(`${APP_NAME}: instance registration failed`, error);
+  }
+
+  await waitForDocumentReady();
+
+  if (!hostInfo.isSensitive) {
+    startDownloadSlotSnapshotObserver();
   }
 
   await runAutomaticDetection();
