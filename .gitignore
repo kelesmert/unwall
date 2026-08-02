@@ -1,2 +1,5 @@
 .local/
 AGENTS.md
+docs/
+Unwall.user-test.js
+unwall-diagnose.user.js

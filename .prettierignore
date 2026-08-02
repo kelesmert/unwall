@@ -1,0 +1,8 @@
+# The userscripts are distributed exactly as committed, and the test suite
+# matches their source text, so reformatting them breaks tests and produces
+# huge diffs against released versions. Their style is documented and enforced
+# by review, not by a formatter.
+Unwall.user.js
+Unblur.user.js
+Unwall.user-test.js
+unwall-diagnose.user.js
