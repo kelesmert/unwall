@@ -46,7 +46,7 @@ test("metadata uses release distribution and top-level pages only", () => {
   const releaseUrl =
     "https://github.com/kelesmert/unwall/releases/latest/download/Unwall.user.js";
 
-  assert.equal(metadataValue("version"), "0.1.10");
+  assert.equal(metadataValue("version"), "0.1.11");
   assert.equal(metadataValue("updateURL"), releaseUrl);
   assert.equal(metadataValue("downloadURL"), releaseUrl);
   assert.equal(metadataValue("run-at"), "document-start");
@@ -158,8 +158,9 @@ test("localized anti-adblock patterns cover action phrasing without broad ad men
   const en = regexArrayValues("en");
   const tr = regexArrayValues("tr");
   const ru = regexArrayValues("ru");
+  const ja = regexArrayValues("ja");
 
-  assert.match(script, /fallbackPatternLanguages = \["en", "tr", "ru"\]/);
+  assert.match(script, /fallbackPatternLanguages = \["en", "tr", "ru", "ja"\]/);
   assert.match(script, /flatMap\(patternLanguage => antiAdblockPatternSets/);
 
   assert.ok(
@@ -179,6 +180,17 @@ test("localized anti-adblock patterns cover action phrasing without broad ad men
       ru,
       "Похоже, вы используете блокировщик рекламы. Пожалуйста, разрешите рекламу на сайте."
     )
+  );
+  assert.ok(
+    matchesAny(
+      ja,
+      "弊社サイトにおいて広告ブロッカーを無効にすることをどうぞご検討ください。"
+    ),
+    "the wall wording observed on jp.reuters.com must match"
+  );
+  assert.ok(
+    matchesAny(ja, "広告ブロッカーを無効にして続ける"),
+    "the wall's call-to-action button must match"
   );
 
   assert.equal(
@@ -202,4 +214,138 @@ test("localized anti-adblock patterns cover action phrasing without broad ad men
     ),
     false
   );
+  assert.equal(
+    matchesAny(
+      ja,
+      "この記事は広告ブロッカーの利用が広告市場に与える影響を解説します。"
+    ),
+    false
+  );
+  assert.equal(
+    matchesAny(ja, "広告ブロッカー検出技術の仕組みについて"),
+    false
+  );
+});
+
+test("every supported language has a full message block", () => {
+  const languages = ["en", "tr", "ru", "ja"];
+
+  const keysFor = language => {
+    const marker = `    ${language}: {`;
+    const start = script.indexOf(marker);
+
+    assert.notEqual(start, -1, `${language} message block should exist`);
+
+    const end = script.indexOf("\n    }", start);
+    return [
+      ...script.slice(start, end).matchAll(/^ {6}([a-zA-Z]+):/gm)
+    ].map(match => match[1]);
+  };
+
+  const reference = keysFor("en");
+
+  assert.ok(reference.length > 40, "the English block should be the reference");
+  assert.match(script, /\["en", "tr", "ru", "ja"\]\s*\.includes\(language\)/);
+
+  for (const language of languages.slice(1)) {
+    assert.deepEqual(
+      keysFor(language).slice().sort(),
+      reference.slice().sort(),
+      `${language} must define exactly the same message keys as en`
+    );
+  }
+});
+
+test("vendor fingerprinting stays inside the project's scope", () => {
+  const listFor = name => {
+    const match = script.match(
+      new RegExp(`const ${name} = \\[([\\s\\S]*?)\\n  \\];`)
+    );
+
+    assert.ok(match, `${name} should exist`);
+
+    return match[1]
+      .split("\n")
+      .map(line => line.trim().replace(/,$/, ""))
+      .filter(line => line.startsWith("/"))
+      .map(line => Function(`return ${line};`)());
+  };
+
+  const attributePatterns = listFor("wallVendorAttributePatterns");
+  const textPatterns = listFor("wallVendorTextPatterns");
+  const matchesAttribute = value =>
+    attributePatterns.some(pattern => pattern.test(value));
+  const matchesText = value =>
+    textPatterns.some(pattern => pattern.test(value));
+
+  for (const vendor of ["freestar", "ad-shield", "blockthrough", "admiral"]) {
+    assert.ok(
+      matchesAttribute(`${vendor}-overlay`),
+      `${vendor} should be recognised in attributes`
+    );
+  }
+
+  // Paywall, sign-in and newsletter vendors are out of scope: recognising them
+  // would push Unwall into removing overlays it does not remove.
+  for (const vendor of ["optinmonster", "unisignin"]) {
+    assert.equal(
+      matchesAttribute(`${vendor}-modal`),
+      false,
+      `${vendor} is not an adblock recovery vendor`
+    );
+  }
+
+  // "admiral" is an ordinary English word, so prose must not trigger it.
+  assert.equal(matchesText("The admiral inspected the fleet."), false);
+  assert.ok(matchesText("Freestar VRM"));
+
+  // A vendor name may prompt, but must never remove unattended.
+  assert.match(script, /function hasPrimaryWallSignal\(detection\)/);
+  assert.match(
+    script,
+    /function canAutoRemove[\s\S]+hasPrimaryWallSignal\(detection\)/
+  );
+  assert.match(script, /hasVendorSignal && !hasTextSignal && !hasAttributeSignal/);
+});
+
+test("the diagnostic trace hook is passive and silent", () => {
+  assert.match(script, /function traceSink\(\)/);
+  assert.match(script, /function traceEntry\(stage, element, reason/);
+  assert.match(script, /TRACE_SINK_LIMIT/);
+
+  // Unwall reads the sink but never creates it, so it adds no page global.
+  assert.doesNotMatch(script, /pageWindow\[TRACE_SINK_KEY\]\s*=[^=]/);
+
+  // The hook must not print anything; formatting belongs to the dev harness.
+  const traceSection = script.slice(
+    script.indexOf("function traceSink()"),
+    script.indexOf("function findWarningTextElements")
+  );
+
+  assert.doesNotMatch(traceSection, /console\./);
+});
+
+test("rejection reasons are available for diagnosis", () => {
+  for (const name of [
+    "visibilityRejectionReason",
+    "popupCandidateRejectionReason",
+    "inlineGateRejectionReason",
+    "traceWarningRejections"
+  ]) {
+    assert.match(script, new RegExp(`function ${name}\\(`));
+  }
+
+  // isVisible and looksLikeInlineGate stay thin wrappers over the reasons.
+  assert.match(
+    script,
+    /function isVisible\(element\) \{\s*return !visibilityRejectionReason\(element\);/
+  );
+  assert.match(
+    script,
+    /function looksLikeInlineGate\(element\) \{\s*return !inlineGateRejectionReason\(element\);/
+  );
+
+  // findPopup reports every ancestor it rejects, not only the first.
+  assert.match(script, /traceEntry\("popup", current, reason\)/);
+  assert.match(script, /popupTerminalRejectionReasons/);
 });

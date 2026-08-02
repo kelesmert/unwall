@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Unwall
 // @namespace    https://github.com/kelesmert/unwall
-// @version      0.1.10
+// @version      0.1.11
 // @description  Detects anti-adblock access walls and removes them only with user approval.
 // @author       Mert Keleş
 // @license      GPL-3.0-or-later
@@ -28,7 +28,7 @@
   "use strict";
 
   const APP_NAME = "Unwall";
-  const SCRIPT_VERSION = "0.1.10";
+  const SCRIPT_VERSION = "0.1.11";
   const INSTANCE_KEY = "__unwall";
   let previousInstance = null;
 
@@ -65,6 +65,8 @@
   const POST_CLEAN_UNLOCK_WATCH_MS = 2200;
   const TRACKED_SCROLL_LISTENER_LIMIT = 800;
   const TRACKED_SCROLL_LISTENER_WINDOW_MS = 18000;
+  const TRACE_SINK_KEY = "__unwallTrace";
+  const TRACE_SINK_LIMIT = 500;
   const UNWALL_ROOT_SELECTOR = "[data-unwall-root]";
   const UNWALL_Z_INDEX = "2147483647";
   const SCROLL_LOCK_EVENT_TYPES = new Set([
@@ -91,7 +93,7 @@
     const language =
       String(browserLanguage).toLowerCase().split("-")[0];
 
-    return ["en", "tr", "ru"].includes(language)
+    return ["en", "tr", "ru", "ja"].includes(language)
       ? language
       : "en";
   }
@@ -266,6 +268,62 @@
       resultRehydrationReason: "Причина восстановления",
       resultCSSScrollLock: "CSS-блокировка прокрутки",
       resultJSScrollLock: "JS-блокировка прокрутки"
+    },
+    ja: {
+      active: "Unwall が有効です。",
+      wallTitle: "Unwall がアクセス制限を検出しました",
+      wallDescription: "このページのアクセス制限を解除しますか？",
+      remove: "解除",
+      ignore: "無視",
+      remember: "解除を記憶",
+      autoConfirmTitle: "このサイトで解除を記憶しますか？",
+      autoConfirmText:
+        "Unwall は {site} で確度の高いアクセス制限を、今後確認せずに解除します。",
+      autoConfirmEnable: "解除を記憶",
+      cancel: "キャンセル",
+      removed: "Unwall がアクセス制限を解除しました。",
+      undo: "元に戻す",
+      restored: "Unwall がページの変更を元に戻しました。",
+      noVisiblePopup:
+        "表示されている広告ブロック検出ウィンドウは見つかりませんでした。コンテンツは削除されていません。",
+      noDetection: "Unwall はこのページでアクセス制限を検出しませんでした。",
+      scanNow: "このページを今すぐスキャン",
+      globalOn: "全体の検出を有効にする",
+      globalOff: "全体の検出を無効にする",
+      autoEnableSite: "このサイトで解除を記憶する",
+      autoDisableSite: "このサイトの記憶された解除を無効にする",
+      forgetSite: "このサイトの設定を削除する",
+      diagnostics: "診断情報を表示",
+      autoEnabled: "このサイトで解除が記憶されます。",
+      autoDisabled: "このサイトの記憶された解除は無効です。",
+      siteForgotten: "このサイトの設定を削除しました。",
+      sensitiveAutoBlocked:
+        "重要なサイトでは自動解除は無効になっています。",
+      sensitiveDetectionBlocked:
+        "重要なサイトでは自動検出は無効になっています。",
+      tableConfidence: "確度",
+      tablePopupCount: "ポップアップ",
+      tableBackdropCount: "背景レイヤー",
+      tableBlurCount: "ぼかし要素",
+      tableInlineGateCount: "インライン制限",
+      tableScrollLock: "スクロールロック",
+      tableTextSignals: "テキストシグナル",
+      tableDomSignals: "DOMシグナル",
+      tableSiteKey: "サイトキー",
+      tableSiteMode: "サイトモード",
+      tableAutoEligible: "自動解除の対象",
+      tableAutoThreshold: "自動解除のしきい値",
+      tableReasons: "理由",
+      resultPopupHidden: "非表示にしたポップアップ",
+      resultBackdropHidden: "非表示にした背景レイヤー",
+      resultBlurFixed: "解除したぼかし",
+      resultInlineGateHidden: "非表示にしたインライン制限",
+      resultResidualNoticeHidden: "非表示にした残存通知",
+      resultControlsRevealed: "表示に戻した操作要素",
+      resultControlsRehydrated: "復元した操作要素",
+      resultRehydrationReason: "復元の理由",
+      resultCSSScrollLock: "CSSスクロールロック",
+      resultJSScrollLock: "JSスクロールロック"
     }
   };
 
@@ -303,10 +361,20 @@
       /добавьте.{0,40}(?:сайт|нас).{0,40}(?:в белый список|в список исключений)/i,
       /(?:разрешите|включите).{0,50}реклам[уы].{0,50}(?:сайт|продолж|доступ|поддерж)/i,
       /реклам[уы].{0,50}(?:разрешите|включите).{0,50}(?:сайт|продолж|доступ|поддерж)/i
+    ],
+    ja: [
+      /(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,20}(?:を検出しま|が検出され|を検知しま|が検知され|を検出いたし)/,
+      /(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,30}(?:をご利用|をお使い|を使用されて|を使用している|が有効になって)/,
+      /(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,60}(?:を無効|をオフ|を解除|を停止|をオフに)/,
+      /(?:無効に|オフに|解除して)[^。]{0,30}(?:広告ブロッカー|広告ブロック|アドブロック)/,
+      /(?:ホワイトリスト|許可リスト|例外リスト)[^。]{0,30}(?:に追加|に登録|へ追加)/,
+      /(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,60}(?:して続ける|して続行|してください|してご覧|をお願い)/,
+      /広告[^。]{0,30}(?:表示を許可|の表示を許可|を許可)[^。]{0,30}(?:ください|お願い|いただ)/,
+      /(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,60}(?:ダウンロード|更新|リロード|再読み込み|再読込)[^。]{0,15}(?:してください|できません|できない|するには|してから|して)/
     ]
   };
 
-  const fallbackPatternLanguages = ["en", "tr", "ru"];
+  const fallbackPatternLanguages = ["en", "tr", "ru", "ja"];
   const antiAdblockPatterns = [
     ...(antiAdblockPatternSets[language] || []),
     ...fallbackPatternLanguages
@@ -327,11 +395,49 @@
     /\b(?:overlay|modal|popup|wall|notice)\s*ad\s*block(?:er|ing)?\b/i
   ];
 
+  // Anti-adblock recovery vendors brand their own walls. Vendor names survive
+  // translation and class-name hashing, so they catch walls in languages the
+  // pattern sets above do not cover. A vendor match alone never reaches
+  // PROMPT_THRESHOLD; it needs the overlay structure to corroborate it.
+  // Only vendors whose product is adblock recovery belong here. Paywall,
+  // sign-in and newsletter popup vendors are deliberately excluded: removing
+  // their overlays is outside what this script does.
+  const wallVendorAttributePatterns = [
+    /\bfreestar\b/i,
+    /\bad[-_\s]?shield\b/i,
+    /\badmiral\b/i,
+    /\bblockthrough\b/i,
+    /\bpagefair\b/i,
+    /\badrecover\b/i,
+    /\badpushup\b/i,
+    /\bpubgalaxy\b/i,
+    /\bpublir\b/i,
+    /\bblockadblock\b/i,
+    /\bfuckadblock\b/i,
+    /\bbabasbm\w*/i
+  ];
+
+  // Narrower than the attribute list: article prose can mention a company by
+  // name, and "admiral" is an ordinary English word, so it is excluded here.
+  const wallVendorTextPatterns = [
+    /\bfreestar\b/i,
+    /\bad[-\s]?shield\b/i,
+    /\bblockthrough\b/i,
+    /\bpagefair\b/i,
+    /\badrecover\b/i,
+    /\badpushup\b/i,
+    /\bpubgalaxy\b/i,
+    /\bpublir\b/i,
+    /\bblockadblock\b/i
+  ];
+
+  const WALL_VENDOR_TEXT_LIMIT = 600;
+
   const inlineGateContextPattern =
-    /(?:download|downloaded|refresh|reload|site|access|continue|allow|whitelist|support|indir|yenile|eri[şs]im|devam|скач|загруз|обнов|доступ)/i;
+    /(?:download|downloaded|refresh|reload|site|access|continue|allow|whitelist|support|indir|yenile|eri[şs]im|devam|скач|загруз|обнов|доступ|ダウンロード|更新|リロード|再読み込み|再読込|サイト|アクセス|続ける|続行|許可|ホワイトリスト|支援)/i;
 
   const inlineGateActionPattern =
-    /(?:(?:please|you need to|you must|must|have to|required).{0,80})?(?:disable|turn off|whitelist|allow|pause|remove).{0,80}(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing))|(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing)).{0,80}(?:disable|turn off|whitelist|allow|refresh|reload|downloaded|download|continue|support)|(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam).{0,80}(?:reklam|engelleyici)|(?:reklam|engelleyici).{0,80}(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam)|(?:отключите|выключите|деактивируйте|разрешите|добавьте|обновите).{0,80}(?:реклам|блокиров)|(?:реклам|блокиров).{0,80}(?:отключ|выключ|разреш|добав|обнов)/i;
+    /(?:(?:please|you need to|you must|must|have to|required).{0,80})?(?:disable|turn off|whitelist|allow|pause|remove).{0,80}(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing))|(?:ad[-\s]*block(?:er|ing)?|anti[-\s]*banner|ads?|advertis(?:e|ement|ing)).{0,80}(?:disable|turn off|whitelist|allow|refresh|reload|downloaded|download|continue|support)|(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam).{0,80}(?:reklam|engelleyici)|(?:reklam|engelleyici).{0,80}(?:devre d[ıi][şs][ıi]|kapat|izin|beyaz liste|yenile|indir|devam)|(?:отключите|выключите|деактивируйте|разрешите|добавьте|обновите).{0,80}(?:реклам|блокиров)|(?:реклам|блокиров).{0,80}(?:отключ|выключ|разреш|добав|обнов)|(?:広告ブロッカー|広告ブロック|アドブロック)[^。]{0,80}(?:無効|オフ|解除|停止|許可|ホワイトリスト|更新|リロード|再読み込み|再読込|ダウンロード|続ける|続行)|(?:無効|オフ|解除|停止|許可|ホワイトリスト|更新|リロード|再読み込み|再読込|ダウンロード)[^。]{0,80}(?:広告ブロッカー|広告ブロック|アドブロック)/i;
 
   const downloadControlTokenPattern =
     /(?:download|downloaded|downlink|file|firmware|rom|mirror|indir|yükle|yukle|скач|загруз)/i;
@@ -344,6 +450,29 @@
 
   const residualInlineNoticePattern =
     /(?:advertisement|advertisements|advertising|ad revenue|living on ads|living on advertisement|lives on ads|lives on advertisement|support.{0,40}ads|ads.{0,40}support|thank you|reklam|te[şs]ekkür|спасибо|реклам)/i;
+
+  const diagnosticProbePattern =
+    /(?:ad[-\s]?block(?:er|ing)?|adblock|anti[-\s]?banner|advert|reklam|engelley|блокировщ|блокиров|реклам)/i;
+
+  const warningElementSelector = [
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[aria-modal="true"]',
+    "[id]",
+    "[class]",
+    "[aria-label]",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "p",
+    "span",
+    "button",
+    "dialog",
+    "div",
+    "section",
+    "aside"
+  ].join(",");
 
   const protectedSelector = [
     "video",
@@ -879,21 +1008,68 @@
       .trim();
   }
 
-  function isVisible(element) {
-    if (!(element instanceof Element) || isInUnwallUI(element)) {
-      return false;
+  function visibilityRejectionReason(element) {
+    if (!(element instanceof Element)) {
+      return "not-an-element";
+    }
+
+    if (isInUnwallUI(element)) {
+      return "unwall-ui";
     }
 
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
 
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      Number(style.opacity || 1) > 0.02 &&
-      rect.width > 5 &&
-      rect.height > 5
-    );
+    if (style.display === "none") {
+      return "display-none";
+    }
+
+    if (style.visibility === "hidden") {
+      return "visibility-hidden";
+    }
+
+    if (Number(style.opacity || 1) <= 0.02) {
+      return "transparent";
+    }
+
+    if (rect.width <= 5 || rect.height <= 5) {
+      return "too-small";
+    }
+
+    return "";
+  }
+
+  function isVisible(element) {
+    return !visibilityRejectionReason(element);
+  }
+
+  function traceSink() {
+    try {
+      const sink = pageWindow[TRACE_SINK_KEY];
+
+      return Array.isArray(sink) && sink.length < TRACE_SINK_LIMIT
+        ? sink
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function traceEntry(stage, element, reason, detail = null) {
+    const sink = traceSink();
+
+    if (!sink) {
+      return;
+    }
+
+    try {
+      sink.push({
+        stage,
+        element,
+        reason,
+        detail
+      });
+    } catch {}
   }
 
   function getAntiAdblockMatch(element) {
@@ -973,6 +1149,58 @@
     );
   }
 
+  function getWallVendorMatch(element) {
+    if (!(element instanceof Element)) {
+      return null;
+    }
+
+    const signalText = getAttributeSignalText(element);
+
+    if (signalText) {
+      const attributePattern = wallVendorAttributePatterns.find(pattern =>
+        pattern.test(signalText)
+      );
+
+      if (attributePattern) {
+        return {
+          matchedBy: "vendor-attribute",
+          pattern: String(attributePattern)
+        };
+      }
+    }
+
+    const text = normalizedText(element);
+
+    if (!text || text.length > WALL_VENDOR_TEXT_LIMIT) {
+      return null;
+    }
+
+    const textPattern = wallVendorTextPatterns.find(pattern =>
+      pattern.test(text)
+    );
+
+    return textPattern
+      ? {
+          matchedBy: "vendor-text",
+          pattern: String(textPattern)
+        }
+      : null;
+  }
+
+  function hasWallVendorSignal(element) {
+    return Boolean(getWallVendorMatch(element));
+  }
+
+  // Vendor signals widen only the warning-element stage on purpose. Inline
+  // gates, residual notices and rehydration still require a real anti-adblock
+  // signal, so this cannot broaden what gets hidden inside page content.
+  function hasWallSignal(element) {
+    return (
+      hasAntiAdblockSignal(element) ||
+      hasWallVendorSignal(element)
+    );
+  }
+
   function hasProtectedToken(element) {
     const nodes = [element];
 
@@ -1041,31 +1269,70 @@
     element.removeAttribute("open");
   }
 
-  function findWarningTextElements(scope = document) {
-    const selectors = [
-      '[role="dialog"]',
-      '[role="alertdialog"]',
-      '[aria-modal="true"]',
-      "[id]",
-      "[class]",
-      "[aria-label]",
-      "h1",
-      "h2",
-      "h3",
-      "h4",
-      "p",
-      "span",
-      "button",
-      "dialog",
-      "div",
-      "section",
-      "aside"
-    ].join(",");
+  function traceWarningRejections(root) {
+    if (!traceSink()) {
+      return;
+    }
 
+    let elements = [];
+
+    try {
+      elements = [...root.querySelectorAll(warningElementSelector)]
+        .slice(0, 4000);
+    } catch {
+      return;
+    }
+
+    for (const element of elements) {
+      if (isInUnwallUI(element)) {
+        continue;
+      }
+
+      const textMatch = getAntiAdblockMatch(element);
+      const attributeMatch = getAntiAdblockAttributeMatch(element);
+      const vendorMatch = getWallVendorMatch(element);
+
+      if (!textMatch && !attributeMatch && !vendorMatch) {
+        continue;
+      }
+
+      const detail = vendorMatch && !textMatch && !attributeMatch
+        ? vendorMatch
+        : {
+            matchedBy: textMatch ? "text" : "attribute",
+            pattern: (textMatch || attributeMatch).pattern
+          };
+
+      const visibilityReason = visibilityRejectionReason(element);
+
+      if (visibilityReason) {
+        traceEntry(
+          "warning",
+          element,
+          `signal-but-${visibilityReason}`,
+          detail
+        );
+        continue;
+      }
+
+      try {
+        if (element.closest(protectedSelector)) {
+          traceEntry(
+            "warning",
+            element,
+            "signal-but-protected-ancestor",
+            detail
+          );
+        }
+      } catch {}
+    }
+  }
+
+  function findWarningTextElements(scope = document) {
     const root =
       scope instanceof Document ? scope : scope.ownerDocument || document;
 
-    return [...root.querySelectorAll(selectors)]
+    return [...root.querySelectorAll(warningElementSelector)]
       .filter(isVisible)
       .filter(element => {
         if (
@@ -1075,39 +1342,42 @@
           return false;
         }
 
-        if (!hasAntiAdblockSignal(element)) {
+        if (!hasWallSignal(element)) {
           return false;
         }
 
         const matchingChild = [...element.children].some(
           child =>
             isVisible(child) &&
-            hasAntiAdblockSignal(child)
+            hasWallSignal(child)
         );
 
         return !matchingChild;
       });
   }
 
-  function findPopup(element) {
-    let current = element;
+  const popupTerminalRejectionReasons = new Set([
+    "unwall-ui",
+    "protected-content",
+    "page-content-boundary"
+  ]);
 
-    while (
-      current &&
-      current !== document.body &&
-      current !== document.documentElement
-    ) {
-      if (isInUnwallUI(current) || containsProtectedContent(current)) {
-        return null;
-      }
+  function popupCandidateRejectionReason(current) {
+    if (isInUnwallUI(current)) {
+      return "unwall-ui";
+    }
 
-      const tag = current.tagName.toLowerCase();
+    if (containsProtectedContent(current)) {
+      return "protected-content";
+    }
 
-      if (tag === "main" || tag === "article") {
-        return null;
-      }
+    const tag = current.tagName.toLowerCase();
 
-      const style = getComputedStyle(current);
+    if (tag === "main" || tag === "article") {
+      return "page-content-boundary";
+    }
+
+    const style = getComputedStyle(current);
       const rect = current.getBoundingClientRect();
       const role = current.getAttribute("role");
       const nativeDialogOpen = isOpenNativeDialog(current);
@@ -1138,18 +1408,48 @@
         normalizedText(current).length < 2500 ||
         dialogLike;
 
-      const stackingLooksModal =
-        numericZIndex(current) >= 5 ||
-        style.position === "fixed" ||
-        dialogLike;
+    const stackingLooksModal =
+      numericZIndex(current) >= 5 ||
+      style.position === "fixed" ||
+      dialogLike;
 
-      if (
-        reasonableSize &&
-        notHugeContent &&
-        stackingLooksModal &&
-        (dialogLike || positioned)
-      ) {
+    if (!reasonableSize) {
+      return "too-small-for-modal";
+    }
+
+    if (!notHugeContent) {
+      return "text-too-long";
+    }
+
+    if (!stackingLooksModal) {
+      return "not-stacked-like-modal";
+    }
+
+    if (!dialogLike && !positioned) {
+      return "not-positioned";
+    }
+
+    return "";
+  }
+
+  function findPopup(element) {
+    let current = element;
+
+    while (
+      current &&
+      current !== document.body &&
+      current !== document.documentElement
+    ) {
+      const reason = popupCandidateRejectionReason(current);
+
+      if (!reason) {
         return current;
+      }
+
+      traceEntry("popup", current, reason);
+
+      if (popupTerminalRejectionReasons.has(reason)) {
+        return null;
       }
 
       current = current.parentElement;
@@ -1193,16 +1493,38 @@
   }
 
   function looksLikeInlineGate(element) {
-    if (
-      !(element instanceof Element) ||
-      isInUnwallUI(element) ||
-      isInlineGateBoundary(element) ||
-      containsProtectedContent(element) ||
-      !isVisible(element) ||
-      !hasAntiAdblockSignal(element) ||
-      !hasInlineGateContext(element)
-    ) {
-      return false;
+    return !inlineGateRejectionReason(element);
+  }
+
+  function inlineGateRejectionReason(element) {
+    if (!(element instanceof Element)) {
+      return "not-an-element";
+    }
+
+    if (isInUnwallUI(element)) {
+      return "unwall-ui";
+    }
+
+    if (isInlineGateBoundary(element)) {
+      return "page-content-boundary";
+    }
+
+    if (containsProtectedContent(element)) {
+      return "protected-content";
+    }
+
+    const visibilityReason = visibilityRejectionReason(element);
+
+    if (visibilityReason) {
+      return visibilityReason;
+    }
+
+    if (!hasAntiAdblockSignal(element)) {
+      return "no-anti-adblock-signal";
+    }
+
+    if (!hasInlineGateContext(element)) {
+      return "no-inline-gate-context";
     }
 
     const text = normalizedText(element);
@@ -1226,13 +1548,17 @@
       !hasInlineGateActionSignal(element) &&
       !strongNoticeEvidence
     ) {
-      return false;
+      return "no-action-signal";
     }
 
     const maxTextLength = noticeStyled ? 1200 : 900;
 
-    if (text.length < 12 || text.length > maxTextLength) {
-      return false;
+    if (text.length < 12) {
+      return "text-too-short";
+    }
+
+    if (text.length > maxTextLength) {
+      return "text-too-long";
     }
 
     const rect = element.getBoundingClientRect();
@@ -1250,7 +1576,15 @@
       rect.height >= 12 &&
       rect.height <= Math.min(height * 0.8, 320);
 
-    return boundedWidth && boundedHeight;
+    if (!boundedWidth) {
+      return "unbounded-width";
+    }
+
+    if (!boundedHeight) {
+      return "unbounded-height";
+    }
+
+    return "";
   }
 
   function inlineGateNoticeStyleSignals(element) {
@@ -1390,10 +1724,20 @@
       current !== document.body &&
       current !== document.documentElement
     ) {
-      if (looksLikeInlineGate(current)) {
+      const reason = inlineGateRejectionReason(current);
+
+      if (reason) {
+        traceEntry("inline-gate", current, reason);
+      } else {
+        const score = inlineGateCandidateScore(current, element);
+
         candidates.push({
           element: current,
-          score: inlineGateCandidateScore(current, element)
+          score
+        });
+
+        traceEntry("inline-gate", current, "candidate", {
+          score
         });
       }
 
@@ -3251,7 +3595,17 @@
     scrollLock
   }) {
     const reasons = [];
+    const signals = [];
     let confidence = 0;
+
+    function addSignal(reason, points) {
+      confidence += points;
+      reasons.push(reason);
+      signals.push({
+        reason,
+        points
+      });
+    }
 
     const hasTextSignal =
       warningElements.some(containsAntiAdblockText);
@@ -3262,28 +3616,32 @@
       inlineGates.some(containsAntiAdblockAttribute);
 
     if (hasTextSignal) {
-      confidence += 70;
-      reasons.push("localized-anti-adblock-text");
+      addSignal("localized-anti-adblock-text", 70);
     }
 
     if (hasAttributeSignal) {
-      confidence += 58;
-      reasons.push("anti-adblock-dom-signal");
+      addSignal("anti-adblock-dom-signal", 58);
+    }
+
+    const hasVendorSignal =
+      warningElements.some(hasWallVendorSignal) ||
+      popups.some(hasWallVendorSignal) ||
+      inlineGates.some(hasWallVendorSignal);
+
+    if (hasVendorSignal && !hasTextSignal && !hasAttributeSignal) {
+      addSignal("wall-vendor-signal", 50);
     }
 
     if (inlineGates.length > 0) {
-      confidence += 10;
-      reasons.push("inline-access-gate");
+      addSignal("inline-access-gate", 10);
     }
 
     if (inlineGates.some(hasInlineGateContext)) {
-      confidence += 10;
-      reasons.push("inline-download-context");
+      addSignal("inline-download-context", 10);
     }
 
     if (inlineGates.some(hasInlineGateActionSignal)) {
-      confidence += 8;
-      reasons.push("inline-action-signal");
+      addSignal("inline-action-signal", 8);
     }
 
     if (
@@ -3297,8 +3655,7 @@
         );
       })
     ) {
-      confidence += 10;
-      reasons.push("dialog-semantics");
+      addSignal("dialog-semantics", 10);
     }
 
     if (
@@ -3308,8 +3665,7 @@
         )
       )
     ) {
-      confidence += 8;
-      reasons.push("modal-positioning");
+      addSignal("modal-positioning", 8);
     }
 
     if (
@@ -3324,32 +3680,31 @@
         );
       })
     ) {
-      confidence += 12;
-      reasons.push("blocking-overlay-layout");
+      addSignal("blocking-overlay-layout", 12);
     }
 
     if (backdrops.length > 0) {
-      confidence += 6;
-      reasons.push("related-backdrop");
+      addSignal("related-backdrop", 6);
     }
 
     if (blurElements.length > 0) {
-      confidence += 4;
-      reasons.push("related-blur");
+      addSignal("related-blur", 4);
     }
 
     if (scrollLock.locked) {
-      confidence += 4;
-      reasons.push("scroll-lock");
+      addSignal("scroll-lock", 4);
     }
 
     return {
       confidence: Math.min(confidence, 100),
-      reasons
+      reasons,
+      signals
     };
   }
 
   function detect() {
+    traceWarningRejections(document);
+
     const warningElements = findWarningTextElements();
     const popups = uniqueElements(
       warningElements
@@ -3398,6 +3753,7 @@
       language,
       confidence: score.confidence,
       reasons: score.reasons,
+      signals: score.signals,
       warningElements,
       popups,
       inlineGates,
@@ -3407,6 +3763,18 @@
       createdAt: Date.now(),
       signature: makeSignature(warningElements, popups, inlineGates)
     };
+
+    for (const element of warningElements) {
+      traceEntry("warning", element, "accepted");
+    }
+
+    for (const element of popups) {
+      traceEntry("popup", element, "accepted");
+    }
+
+    for (const element of inlineGates) {
+      traceEntry("inline-gate", element, "accepted");
+    }
 
     state.lastDetection = detection;
     return detection;
@@ -4606,11 +4974,22 @@
     card.appendChild(actions);
   }
 
+  // A vendor name identifies a wall well enough to ask about it, but not well
+  // enough to act unattended: the name can appear on a page for unrelated
+  // reasons. Unattended removal keeps requiring a real anti-adblock signal.
+  function hasPrimaryWallSignal(detection) {
+    return (
+      detection.reasons.includes("localized-anti-adblock-text") ||
+      detection.reasons.includes("anti-adblock-dom-signal")
+    );
+  }
+
   function canAutoRemove(detection) {
     return (
       state.siteMode === MODES.auto &&
       !hostInfo.isSensitive &&
       detection.confidence >= AUTO_THRESHOLD &&
+      hasPrimaryWallSignal(detection) &&
       (detection.popups.length > 0 || detection.inlineGates.length > 0)
     );
   }
